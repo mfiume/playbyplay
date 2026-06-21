@@ -3,237 +3,209 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0a0a0a">
-<meta name="description" content="Bloordale 10U A — dead-simple digital baseball scorekeeping. Tap to score the game play-by-play.">
+<meta name="theme-color" content="#0F1A2A">
+<meta name="description" content="Play-by-play baseball scorekeeping for the bench — tap each play and watch runners move around the bases, home and away.">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Scorekeeper">
+<meta name="apple-mobile-web-app-title" content="Play-by-Play">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230a0a0a'/%3E%3Ccircle cx='50' cy='50' r='30' fill='%23fff'/%3E%3Cpath d='M30 30 Q50 50 30 70 M70 30 Q50 50 70 70' stroke='%23c8102e' stroke-width='3' fill='none'/%3E%3C/svg%3E">
-<title>Bloordale 10U A · Scorekeeper</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230F1A2A'/%3E%3Cpath d='M50 16 L84 50 L50 84 L16 50 Z' fill='none' stroke='%23EDE8DA' stroke-width='4'/%3E%3Ccircle cx='50' cy='50' r='9' fill='%23B5683C'/%3E%3C/svg%3E">
+<title>Bombers · Play-by-Play</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=Hanken+Grotesk:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div id="app">
 
-  <!-- ======================= HEADER ======================= -->
-  <header class="app-header">
+  <!-- ===================== TOP BAR ===================== -->
+  <header class="topbar">
     <div class="brand">
-      <span class="brand-mark">⚾</span>
-      <div class="brand-text">
-        <strong>Bloordale 10U A</strong>
-        <span class="brand-sub">Scorekeeper</span>
-      </div>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 100 100" width="26" height="26"><path d="M50 14 L86 50 L50 86 L14 50 Z" fill="none" stroke="currentColor" stroke-width="6"/><circle cx="50" cy="50" r="8" fill="currentColor"/></svg>
+      </span>
+      <span class="brand-text">
+        <strong id="brand-name">Bombers</strong>
+        <span class="brand-sub">Play-by-Play</span>
+      </span>
     </div>
-    <div class="header-actions">
-      <button id="btn-menu" class="icon-btn" title="Game menu" aria-label="Game menu">⋯</button>
-    </div>
+    <button id="btn-menu" class="icon-btn" title="Game menu" aria-label="Game menu">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>
+    </button>
   </header>
 
-  <!-- Scoreboard strip (visible on Score / Card / Stats) -->
-  <div id="scoreboard" class="scoreboard hidden">
-    <div class="sb-team" id="sb-away"><span class="sb-name">Away</span><span class="sb-runs">0</span></div>
-    <div class="sb-mid">
-      <span class="sb-inning" id="sb-inning">—</span>
-      <span class="sb-outs" id="sb-outs">0 out</span>
+  <!-- ===================== SCOREBOARD ===================== -->
+  <div id="scorebar" class="scorebar hidden">
+    <button class="sb-team" id="sb-away" data-side="away">
+      <span class="sb-abbr" id="sb-away-abbr">AWY</span>
+      <span class="sb-runs" id="sb-away-runs">0</span>
+    </button>
+    <div class="sb-center">
+      <span class="sb-half" id="sb-half">▲ 1st</span>
+      <span class="sb-outs" id="sb-outs">
+        <i class="out-dot" data-o="1"></i><i class="out-dot" data-o="2"></i><i class="out-dot" data-o="3"></i>
+        <em id="sb-outs-label">0 out</em>
+      </span>
     </div>
-    <div class="sb-team" id="sb-home"><span class="sb-name">Home</span><span class="sb-runs">0</span></div>
+    <button class="sb-team" id="sb-home" data-side="home">
+      <span class="sb-abbr" id="sb-home-abbr">HOM</span>
+      <span class="sb-runs" id="sb-home-runs">0</span>
+    </button>
   </div>
 
-  <!-- ======================= MAIN ======================= -->
   <main id="main">
 
-    <!-- ---------- SETUP TAB ---------- -->
-    <section id="tab-setup" class="tab">
+    <!-- ===================== SETUP ===================== -->
+    <section id="view-setup" class="view">
       <div class="panel">
-        <h2>Game</h2>
+        <h2 class="panel-title">New game</h2>
         <div class="field-row">
-          <label>Date <input type="date" id="f-date"></label>
-          <label>Place <input type="text" id="f-place" placeholder="Field / diamond"></label>
+          <label>Date<input type="date" id="f-date"></label>
+          <label>Field<input type="text" id="f-place" placeholder="Diamond / park"></label>
         </div>
         <div class="field-row">
-          <label>Away team <input type="text" id="f-away" placeholder="Visitors" value="Visitors"></label>
-          <label>Home team <input type="text" id="f-home" placeholder="Bloordale" value="Bloordale"></label>
+          <label>Away team<input type="text" id="f-away" placeholder="Visitors"></label>
+          <label class="swatch-label">Color<input type="color" id="f-away-color" value="#34C0D9"></label>
         </div>
         <div class="field-row">
-          <label class="full">We are batting as
-            <select id="f-ourside">
-              <option value="away">Away (bat first)</option>
-              <option value="home" selected>Home (bat second)</option>
-            </select>
-          </label>
+          <label>Home team<input type="text" id="f-home" placeholder="Bombers"></label>
+          <label class="swatch-label">Color<input type="color" id="f-home-color" value="#E5484D"></label>
         </div>
       </div>
 
       <div class="panel">
         <div class="panel-head">
-          <h2>Our lineup</h2>
-          <div class="panel-head-actions">
-            <button id="btn-load-roster" class="ghost-btn small">Load saved</button>
-            <button id="btn-save-roster" class="ghost-btn small">Save roster</button>
+          <h2 class="panel-title">Batting orders</h2>
+          <div class="team-tabs">
+            <button class="team-tab active" id="tab-away" data-team="away">Away</button>
+            <button class="team-tab" id="tab-home" data-team="home">Home</button>
           </div>
         </div>
-        <p class="hint">Add your batting order. Drag the ⠿ handle to reorder.</p>
+        <p class="hint" id="lineup-hint">Add batters in order. Use ▲▼ to reorder.</p>
         <ol id="lineup-list" class="lineup"></ol>
-        <div class="add-player">
+        <div class="add-row">
           <input type="text" id="np-num" inputmode="numeric" placeholder="#" maxlength="3" class="np-num">
           <input type="text" id="np-name" placeholder="Player name" class="np-name">
-          <select id="np-pos" class="np-pos">
-            <option value="">POS</option>
-            <option>P</option><option>C</option><option>1B</option><option>2B</option>
-            <option>3B</option><option>SS</option><option>LF</option><option>CF</option>
-            <option>RF</option><option>DH</option><option>EH</option><option>—</option>
-          </select>
-          <button id="btn-add-player" class="primary-btn">Add</button>
+          <input type="text" id="np-pos" placeholder="POS" maxlength="3" class="np-pos">
+          <button id="btn-add" class="btn primary">Add</button>
+        </div>
+        <div class="add-tools">
+          <button id="btn-fill9" class="btn ghost small">Fill 9 spots</button>
+          <button id="btn-load-roster" class="btn ghost small">Load saved</button>
+          <button id="btn-save-roster" class="btn ghost small">Save roster</button>
         </div>
       </div>
 
       <div class="panel center">
-        <button id="btn-start" class="cta-btn">▶ Start game</button>
-        <button id="btn-resume" class="ghost-btn hidden">Resume game in progress</button>
+        <button id="btn-start" class="btn cta">Play ball ⚾</button>
       </div>
     </section>
 
-    <!-- ---------- SCORE TAB ---------- -->
-    <section id="tab-score" class="tab hidden">
-      <div class="now-batting">
-        <span class="nb-label">Now batting</span>
-        <div class="nb-player">
-          <span class="nb-num" id="nb-num">#—</span>
+    <!-- ===================== GAME ===================== -->
+    <section id="view-game" class="view hidden">
+      <div class="stage-wrap">
+        <canvas id="field" class="field"></canvas>
+        <div class="runner-layer" id="runner-layer"></div>
+        <div class="runner-pop hidden" id="runner-pop"></div>
+      </div>
+
+      <div class="nowbat">
+        <span class="nb-eyebrow" id="nb-eyebrow">Now batting</span>
+        <div class="nb-card">
+          <span class="nb-jersey" id="nb-jersey">—</span>
           <span class="nb-name" id="nb-name">—</span>
           <span class="nb-pos" id="nb-pos"></span>
         </div>
-        <div class="nb-order" id="nb-order"></div>
+        <div class="nb-deck" id="nb-deck"></div>
       </div>
 
-      <!-- Diamond -->
-      <div class="diamond-wrap">
-        <div class="diamond" id="diamond">
-          <button class="base base-2" data-base="2" aria-label="Second base"></button>
-          <button class="base base-3" data-base="3" aria-label="Third base"></button>
-          <button class="base base-1" data-base="1" aria-label="First base"></button>
-          <div class="base base-home" aria-hidden="true"></div>
-          <svg class="diamond-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-            <polygon points="50,6 94,50 50,94 6,50" fill="none"></polygon>
-          </svg>
-        </div>
-        <div class="runner-tip" id="runner-tip">Tap a runner to advance them</div>
-      </div>
-
-      <!-- Outcome buttons -->
-      <div class="outcomes" id="outcomes">
-        <div class="outcome-group">
-          <span class="og-label">Hit</span>
-          <div class="og-buttons">
+      <div class="outcomes">
+        <div class="oc-group">
+          <span class="oc-label">Hit</span>
+          <div class="oc-row">
             <button class="oc hit" data-result="1B">1B</button>
             <button class="oc hit" data-result="2B">2B</button>
             <button class="oc hit" data-result="3B">3B</button>
             <button class="oc hit hr" data-result="HR">HR</button>
           </div>
         </div>
-        <div class="outcome-group">
-          <span class="og-label">On base</span>
-          <div class="og-buttons">
+        <div class="oc-group">
+          <span class="oc-label">Reached</span>
+          <div class="oc-row">
             <button class="oc reach" data-result="BB">BB</button>
             <button class="oc reach" data-result="HBP">HBP</button>
             <button class="oc reach" data-result="ROE">Error</button>
             <button class="oc reach" data-result="FC">FC</button>
           </div>
         </div>
-        <div class="outcome-group">
-          <span class="og-label">Out</span>
-          <div class="og-buttons">
+        <div class="oc-group">
+          <span class="oc-label">Out</span>
+          <div class="oc-row">
             <button class="oc out" data-result="K">K</button>
             <button class="oc out" data-result="GO">Ground</button>
             <button class="oc out" data-result="FO">Fly</button>
             <button class="oc out" data-result="PO">Pop/Line</button>
           </div>
         </div>
-        <div class="outcome-group">
-          <span class="og-label">Other</span>
-          <div class="og-buttons">
-            <button class="oc other" data-result="SAC">Sac</button>
-            <button class="oc other" data-result="FO2">DP/Other out</button>
-            <button class="oc other-undo" id="btn-undo">↶ Undo</button>
-            <button class="oc other-end" id="btn-endhalf">End ½ inning</button>
+        <div class="oc-group">
+          <span class="oc-label">More</span>
+          <div class="oc-row">
+            <button class="oc more" data-result="SAC">Sac</button>
+            <button class="oc more" data-result="DP">DP</button>
+            <button class="oc undo" id="btn-undo">↶ Undo</button>
+            <button class="oc end" id="btn-endhalf">End ½</button>
           </div>
         </div>
       </div>
+    </section>
 
-      <!-- Pending-play confirm bar -->
-      <div id="confirm-bar" class="confirm-bar hidden">
-        <div class="cb-info" id="cb-info">Single — runners advanced.</div>
-        <div class="cb-actions">
-          <button id="cb-cancel" class="ghost-btn small">Cancel</button>
-          <button id="cb-confirm" class="primary-btn">Confirm ▶</button>
-        </div>
+    <!-- ===================== PLAYS ===================== -->
+    <section id="view-plays" class="view hidden">
+      <div id="plays" class="plays">
+        <p class="empty" id="plays-empty">No plays yet — head to the Game tab and tap an outcome to start the log.</p>
       </div>
     </section>
 
-    <!-- ---------- CARD TAB ---------- -->
-    <section id="tab-card" class="tab hidden">
-      <p class="hint card-hint">The digital scorecard — fills in automatically as you score. Scroll sideways for all innings.</p>
-      <div class="card-scroll">
-        <table id="scorecard" class="scorecard"></table>
-      </div>
-    </section>
-
-    <!-- ---------- STATS TAB ---------- -->
-    <section id="tab-stats" class="tab hidden">
+    <!-- ===================== BOX ===================== -->
+    <section id="view-box" class="view hidden">
       <div class="panel">
-        <h2>Box score — batting</h2>
-        <div class="table-wrap"><table id="box-batting" class="stats-table"></table></div>
+        <h2 class="panel-title">Line score</h2>
+        <div class="ls-scroll"><table id="linescore" class="linescore"></table></div>
       </div>
       <div class="panel">
-        <h2>By inning</h2>
-        <div class="table-wrap"><table id="box-inning" class="stats-table"></table></div>
+        <h2 class="panel-title" id="box-away-title">Away — batting</h2>
+        <div class="bx-scroll"><table id="box-away" class="batting-box"></table></div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>Pitchers (opponent / ours)</h2>
-          <button id="btn-add-pitcher" class="ghost-btn small">+ Pitcher</button></div>
-        <div class="table-wrap"><table id="box-pitchers" class="stats-table"></table></div>
+        <h2 class="panel-title" id="box-home-title">Home — batting</h2>
+        <div class="bx-scroll"><table id="box-home" class="batting-box"></table></div>
       </div>
     </section>
 
   </main>
 
-  <!-- ======================= BOTTOM NAV ======================= -->
-  <nav class="bottom-nav" id="bottom-nav">
-    <button class="nav-btn active" data-tab="setup"><span class="nav-ico">⚙</span><span>Setup</span></button>
-    <button class="nav-btn" data-tab="score"><span class="nav-ico">⚾</span><span>Score</span></button>
-    <button class="nav-btn" data-tab="card"><span class="nav-ico">▦</span><span>Card</span></button>
-    <button class="nav-btn" data-tab="stats"><span class="nav-ico">📊</span><span>Stats</span></button>
+  <!-- ===================== BOTTOM NAV ===================== -->
+  <nav class="botnav" id="botnav">
+    <button class="nav-btn active" data-view="setup"><span class="nav-ico">⚙</span><span>Setup</span></button>
+    <button class="nav-btn" data-view="game"><span class="nav-ico">◆</span><span>Game</span></button>
+    <button class="nav-btn" data-view="plays"><span class="nav-ico">≡</span><span>Plays</span></button>
+    <button class="nav-btn" data-view="box"><span class="nav-ico">▦</span><span>Box</span></button>
   </nav>
 
-  <!-- ======================= MENU SHEET ======================= -->
-  <div id="sheet-backdrop" class="sheet-backdrop hidden"></div>
+  <!-- ===================== MENU SHEET ===================== -->
+  <div id="backdrop" class="backdrop hidden"></div>
   <div id="menu-sheet" class="sheet hidden">
     <h3>Game menu</h3>
-    <button class="sheet-item" data-action="new">🆕 New game</button>
-    <button class="sheet-item" data-action="export">⬇ Export game (JSON)</button>
-    <button class="sheet-item" data-action="import">⬆ Import game (JSON)</button>
-    <button class="sheet-item" data-action="print">🖨 Print scorecard</button>
-    <button class="sheet-item danger" data-action="reset">🗑 Reset everything</button>
+    <button class="sheet-item" data-action="new">New game</button>
+    <button class="sheet-item" data-action="export">Export game (JSON)</button>
+    <button class="sheet-item" data-action="import">Import game (JSON)</button>
+    <button class="sheet-item danger" data-action="reset">Reset everything</button>
     <button class="sheet-item close" data-action="close">Close</button>
     <input type="file" id="import-file" accept="application/json" hidden>
   </div>
 
-  <!-- Runner action mini-sheet -->
-  <div id="runner-sheet" class="sheet hidden">
-    <h3 id="rs-title">Runner</h3>
-    <div class="rs-buttons">
-      <button class="sheet-item" data-radv="1">Advance 1 base</button>
-      <button class="sheet-item" data-radv="steal">Stolen base (advance 1) 🏃</button>
-      <button class="sheet-item" data-radv="home">Score (home) 🏠</button>
-      <button class="sheet-item danger" data-radv="out">Out on bases</button>
-      <button class="sheet-item" data-radv="back">Send back 1 base</button>
-      <button class="sheet-item close" data-radv="close">Close</button>
-    </div>
-  </div>
-
-  <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
-
 </div>
 <script src="app.js"></script>
 </body>

@@ -1,37 +1,20 @@
 /* ===========================================================================
-   Bloordale 10U A · Scorekeeper
-   A dead-simple, tap-driven digital baseball scorecard.
-   Tracks OUR offense play-by-play (the paper scorecard), opponent runs for the
-   scoreboard, and produces a live box score. Vanilla JS, no build, localStorage.
+   Bombers · Play-by-Play
+   A tap-to-score baseball scorecard that tracks every play and every runner's
+   trip around the bases — for BOTH teams. Vanilla JS, no build, localStorage.
+   The diamond is the hero: runner tokens glide base-to-base along the paths.
    =========================================================================== */
 (function () {
   'use strict';
 
-  // ---------- tiny helpers ----------
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const uid = () => Math.random().toString(36).slice(2, 9);
   const clone = (o) => JSON.parse(JSON.stringify(o));
-  const STORE = 'bloordale-scorekeeper-v1';
-  const ROSTER = 'bloordale-roster-v1';
-
-  // Default batting order — used on first load and when "Load saved" finds none.
-  const DEFAULT_ROSTER = [
-    { num: '15', name: 'Ozzy Day' },
-    { num: '17', name: 'Emmett Pitton' },
-    { num: '19', name: 'Alexander Fiume' },
-    { num: '9',  name: 'Devin Sen' },
-    { num: '35', name: 'Connor Nascimento' },
-    { num: '10', name: 'Everett Funston' },
-    { num: '14', name: 'Gregory Stratigopoulos' },
-    { num: '99', name: 'Lincoln Shamliyan Bowen' },
-    { num: '5',  name: 'Adrian Stevanovic' },
-    { num: '12', name: 'Ryder Varrik' },
-    { num: '7',  name: 'Axel Pettengell' },
-    { num: '36', name: 'James Reason' },
-    { num: '78', name: 'William Manz' },
-  ];
-  const seedLineup = () => DEFAULT_ROSTER.map(p => ({ id: uid(), num: p.num, name: p.name, pos: '' }));
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  const STORE = 'bombers-pbp-v1';
+  const ROSTER = { away: 'bombers-roster-away-v1', home: 'bombers-roster-home-v1' };
+  const STEP = 240; // ms per base of runner travel
 
   let toastTimer;
   function toast(msg) {
@@ -43,52 +26,62 @@
   }
 
   // ---------- result definitions ----------
-  // reach: base the batter lands on (4 = scores). adv: bases existing runners
-  // auto-advance on a hit. forced: walk-style forced push only.
+  // reach: base the batter lands on (4 = scores). adv: bases all runners move on
+  // a hit. forced: walk-style push only. out: records an out.
   const R = {
-    '1B':  { label: 'Single',        hit: true,  ab: true,  reach: 1, adv: 1 },
-    '2B':  { label: 'Double',        hit: true,  ab: true,  reach: 2, adv: 2 },
-    '3B':  { label: 'Triple',        hit: true,  ab: true,  reach: 3, adv: 3 },
-    'HR':  { label: 'Home Run',      hit: true,  ab: true,  reach: 4, adv: 4 },
-    'BB':  { label: 'Walk',          hit: false, ab: false, reach: 1, forced: true, bb: true },
-    'HBP': { label: 'Hit by pitch',  hit: false, ab: false, reach: 1, forced: true, hbp: true },
-    'ROE': { label: 'Reached on error', hit: false, ab: true, reach: 1, adv: 1, noRbi: true },
-    'FC':  { label: "Fielder's choice", hit: false, ab: true, reach: 1, forced: true },
-    'K':   { label: 'Strikeout',     hit: false, ab: true,  out: true, so: true },
-    'GO':  { label: 'Ground out',    hit: false, ab: true,  out: true },
-    'FO':  { label: 'Fly out',       hit: false, ab: true,  out: true },
-    'PO':  { label: 'Pop/Line out',  hit: false, ab: true,  out: true },
-    'SAC': { label: 'Sacrifice',     hit: false, ab: false, out: true, sac: true, adv: 1 },
-    'FO2': { label: 'Out',           hit: false, ab: true,  out: true },
+    '1B':  { label: 'Single',          tag: '1B',  hit: 1, ab: 1, reach: 1, adv: 1 },
+    '2B':  { label: 'Double',          tag: '2B',  hit: 1, ab: 1, reach: 2, adv: 2 },
+    '3B':  { label: 'Triple',          tag: '3B',  hit: 1, ab: 1, reach: 3, adv: 3 },
+    'HR':  { label: 'Home run',        tag: 'HR',  hit: 1, ab: 1, reach: 4, adv: 4 },
+    'BB':  { label: 'Walk',            tag: 'BB',  bb: 1, reach: 1, forced: 1 },
+    'HBP': { label: 'Hit by pitch',    tag: 'HP',  bb: 1, reach: 1, forced: 1 },
+    'ROE': { label: 'Reached on error',tag: 'E',   ab: 1, reach: 1, adv: 1, noRbi: 1, roe: 1 },
+    'FC':  { label: "Fielder's choice",tag: 'FC',  ab: 1, reach: 1, forced: 1 },
+    'K':   { label: 'Strikeout',       tag: 'K',   ab: 1, out: 1, so: 1 },
+    'GO':  { label: 'Ground out',      tag: 'GO',  ab: 1, out: 1, adv: 1 },
+    'FO':  { label: 'Fly out',         tag: 'F',   ab: 1, out: 1 },
+    'PO':  { label: 'Pop / line out',  tag: 'P',   ab: 1, out: 1 },
+    'SAC': { label: 'Sacrifice',       tag: 'SAC', out: 1, sac: 1, adv: 1 },
+    'DP':  { label: 'Double play',     tag: 'DP',  ab: 1, out: 2 },
   };
-  // short tag drawn in scorecard cell
-  const TAG = { '1B':'1B','2B':'2B','3B':'3B','HR':'HR','BB':'BB','HBP':'HP','ROE':'E','FC':'FC',
-                'K':'K','GO':'GO','FO':'F','PO':'P','SAC':'SAC','FO2':'OUT' };
+
+  // ---------- default rosters ----------
+  const BOMBERS = [
+    { num: '15', name: 'Ozzy Day', pos: '' }, { num: '17', name: 'Emmett Pitton', pos: '' },
+    { num: '19', name: 'Alexander Fiume', pos: '' }, { num: '9', name: 'Devin Sen', pos: '' },
+    { num: '35', name: 'Connor Nascimento', pos: '' }, { num: '10', name: 'Everett Funston', pos: '' },
+    { num: '14', name: 'Gregory Stratigopoulos', pos: '' }, { num: '99', name: 'Lincoln Shamliyan Bowen', pos: '' },
+    { num: '5', name: 'Adrian Stevanovic', pos: '' }, { num: '12', name: 'Ryder Varrik', pos: '' },
+    { num: '7', name: 'Axel Pettengell', pos: '' }, { num: '36', name: 'James Reason', pos: '' },
+    { num: '78', name: 'William Manz', pos: '' },
+  ];
+  const mkPlayers = (arr) => arr.map(p => ({ id: uid(), num: p.num, name: p.name, pos: p.pos || '' }));
 
   // ---------- state ----------
   let g;
-  const history = []; // undo snapshots of g.live
+  const undoStack = [];
+  let editTeam = 'home';   // which lineup the setup editor is showing
+  let animChain = Promise.resolve();
+  let popPaId = null;      // runner the quick-action popover targets
 
   function blankLive() {
     return {
-      started: false,
-      inning: 1,
-      half: 'top',           // 'top' | 'bottom'
-      outs: 0,
-      batterIdx: 0,
-      bases: [null, null, null, null], // 1=1B,2=2B,3=3B; runner = {paId}
-      pas: [],               // our plate appearances
-      oppRunsByInning: {},   // {inningNo: runs}
-      lobByInning: {},
-      errByPlayer: {},
-      selectedBase: null,
+      started: false, inning: 1, half: 'top', outs: 0,
+      bases: { 1: null, 2: null, 3: null },
+      idx: { away: 0, home: 0 },
+      pas: [],
+      runs: { away: 0, home: 0 },
+      rbi_seq: 0,
     };
   }
   function blankGame() {
     return {
-      meta: { date: '', place: '', away: 'Visitors', home: 'Bloordale', ourside: 'home' },
-      lineup: [],
-      pitchers: [{ no: '', name: 'Opp pitcher', w:'',l:'',ip:'',ab:'',r:'',er:'',h:'',so:'',bb:'' }],
+      meta: {
+        date: '', place: '',
+        away: { name: 'Visitors', color: '#34C0D9' },
+        home: { name: 'Bombers', color: '#E5484D' },
+      },
+      teams: { away: [], home: mkPlayers(BOMBERS) },
       live: blankLive(),
     };
   }
@@ -100,103 +93,100 @@
       if (raw) { g = JSON.parse(raw); return true; }
     } catch (e) {}
     g = blankGame();
-    g.lineup = seedLineup();   // pre-fill the default batting order on first use
     return false;
   }
-  function snapshot() {
-    history.push(clone(g.live));
-    if (history.length > 60) history.shift();
+
+  // ---------- side helpers ----------
+  const battingSide = () => (g.live.half === 'top' ? 'away' : 'home');
+  const fieldingSide = () => (g.live.half === 'top' ? 'home' : 'away');
+  const lineup = (side = battingSide()) => g.teams[side];
+  const teamColor = (side) => g.meta[side].color;
+  const teamName = (side) => g.meta[side].name || (side === 'away' ? 'Away' : 'Home');
+  function currentBatter() {
+    const lu = lineup();
+    if (!lu.length) return null;
+    return lu[g.live.idx[battingSide()] % lu.length];
   }
-
-  // ---------- lineup helpers ----------
-  const L = () => g.lineup;
-  const currentBatter = () => L().length ? L()[g.live.batterIdx % L().length] : null;
-  const playerById = (id) => L().find(p => p.id === id);
+  function onDeck() {
+    const lu = lineup();
+    if (lu.length < 2) return null;
+    return lu[(g.live.idx[battingSide()] + 1) % lu.length];
+  }
   const paById = (id) => g.live.pas.find(p => p.id === id);
-
-  function isOurTurn() {
-    const s = g.meta.ourside;
-    return (s === 'away' && g.live.half === 'top') || (s === 'home' && g.live.half === 'bottom');
+  function playerById(id) {
+    for (const s of ['away', 'home']) { const p = g.teams[s].find(x => x.id === id); if (p) return p; }
+    return null;
   }
 
   // =========================================================================
-  //  SETUP — lineup editing
+  //  SETUP — two-team lineup editor
   // =========================================================================
   function addPlayer() {
     const num = $('#np-num').value.trim();
     const name = $('#np-name').value.trim();
-    const pos = $('#np-pos').value;
+    const pos = $('#np-pos').value.trim().toUpperCase();
     if (!name) { toast('Enter a player name'); return; }
-    L().push({ id: uid(), num, name, pos });
+    g.teams[editTeam].push({ id: uid(), num, name, pos });
     $('#np-num').value = ''; $('#np-name').value = ''; $('#np-pos').value = '';
-    $('#np-name').focus();
+    $('#np-name').focus(); save(); renderLineup();
+  }
+  function fill9() {
+    const lu = g.teams[editTeam];
+    for (let i = lu.length; i < 9; i++) lu.push({ id: uid(), num: String(i + 1), name: 'Batter ' + (i + 1), pos: '' });
     save(); renderLineup();
   }
-  function removePlayer(id) {
-    g.lineup = L().filter(p => p.id !== id);
+  function moveRow(id, dir) {
+    const lu = g.teams[editTeam];
+    const i = lu.findIndex(p => p.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= lu.length) return;
+    [lu[i], lu[j]] = [lu[j], lu[i]];
     save(); renderLineup();
   }
-
+  function delRow(id) {
+    g.teams[editTeam] = g.teams[editTeam].filter(p => p.id !== id);
+    save(); renderLineup();
+  }
   function renderLineup() {
     const ol = $('#lineup-list');
+    document.documentElement.style.setProperty('--turn', teamColor(editTeam));
+    const lu = g.teams[editTeam];
     ol.innerHTML = '';
-    L().forEach((p, i) => {
+    lu.forEach((p, i) => {
       const li = document.createElement('li');
-      li.dataset.id = p.id;
+      li.className = 'lineup-row';
       li.innerHTML =
-        `<span class="handle" title="Drag to reorder">⠿</span>` +
-        `<span class="ord">${i + 1}</span>` +
-        `<span class="pnum">${p.num ? '#' + p.num : ''}</span>` +
-        `<span class="pname">${escapeHtml(p.name)}</span>` +
-        (p.pos ? `<span class="ppos">${p.pos}</span>` : '') +
-        `<button class="del" aria-label="Remove">×</button>`;
-      li.querySelector('.del').addEventListener('click', () => removePlayer(p.id));
-      attachDrag(li);
+        `<span class="ln-order">${i + 1}</span>` +
+        `<span class="ln-jersey">${p.num ? '#' + esc(p.num) : '·'}</span>` +
+        `<span class="ln-name">${esc(p.name)}</span>` +
+        `<span class="ln-pos">${esc(p.pos || '')}</span>` +
+        `<span class="ln-move"><button data-up="${p.id}" aria-label="Move up">▲</button>` +
+        `<button data-down="${p.id}" aria-label="Move down">▼</button></span>` +
+        `<button class="ln-del" data-del="${p.id}" aria-label="Remove">×</button>`;
       ol.appendChild(li);
     });
+    $('#lineup-hint').textContent = lu.length
+      ? `${lu.length} in the ${editTeam} order — ▲▼ to reorder.`
+      : `Add the ${editTeam} batting order, or tap “Fill 9 spots”.`;
   }
-
-  // pointer-based drag reorder (works on touch + mouse)
-  let dragLi = null;
-  function attachDrag(li) {
-    const handle = li.querySelector('.handle');
-    handle.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      dragLi = li; li.classList.add('dragging');
-      const move = (ev) => {
-        const y = ev.clientY;
-        const sibs = $$('#lineup-list li').filter(x => x !== dragLi);
-        for (const s of sibs) {
-          const r = s.getBoundingClientRect();
-          if (y < r.top + r.height / 2) { s.parentNode.insertBefore(dragLi, s); return; }
-        }
-        $('#lineup-list').appendChild(dragLi);
-      };
-      const up = () => {
-        document.removeEventListener('pointermove', move);
-        document.removeEventListener('pointerup', up);
-        li.classList.remove('dragging');
-        // commit new order
-        const ids = $$('#lineup-list li').map(x => x.dataset.id);
-        g.lineup = ids.map(id => L().find(p => p.id === id));
-        dragLi = null;
-        save(); renderLineup();
-      };
-      document.addEventListener('pointermove', move);
-      document.addEventListener('pointerup', up);
-    });
+  function switchEditTeam(team) {
+    editTeam = team;
+    $$('.team-tab').forEach(t => t.classList.toggle('active', t.dataset.team === team));
+    renderLineup();
   }
-
   function saveRoster() {
-    if (!L().length) { toast('Nothing to save'); return; }
-    try { localStorage.setItem(ROSTER, JSON.stringify(L())); toast('Roster saved'); } catch (e) {}
+    try { localStorage.setItem(ROSTER[editTeam], JSON.stringify(g.teams[editTeam])); toast(`${cap(editTeam)} roster saved`); } catch (e) {}
   }
   function loadRoster() {
     try {
-      const raw = localStorage.getItem(ROSTER);
-      if (!raw) { g.lineup = seedLineup(); save(); renderLineup(); toast('Loaded default roster'); return; }
-      g.lineup = JSON.parse(raw).map(p => ({ ...p, id: p.id || uid() }));
-      save(); renderLineup(); toast('Roster loaded');
+      const raw = localStorage.getItem(ROSTER[editTeam]);
+      if (!raw) {
+        if (editTeam === 'home') { g.teams.home = mkPlayers(BOMBERS); save(); renderLineup(); toast('Loaded default Bombers roster'); }
+        else toast('No saved away roster yet');
+        return;
+      }
+      g.teams[editTeam] = JSON.parse(raw).map(p => ({ ...p, id: p.id || uid() }));
+      save(); renderLineup(); toast(`${cap(editTeam)} roster loaded`);
     } catch (e) { toast('Could not load roster'); }
   }
 
@@ -206,555 +196,606 @@
   function readMeta() {
     g.meta.date = $('#f-date').value;
     g.meta.place = $('#f-place').value.trim();
-    g.meta.away = $('#f-away').value.trim() || 'Away';
-    g.meta.home = $('#f-home').value.trim() || 'Home';
-    g.meta.ourside = $('#f-ourside').value;
+    g.meta.away.name = $('#f-away').value.trim() || 'Visitors';
+    g.meta.home.name = $('#f-home').value.trim() || 'Bombers';
+    g.meta.away.color = $('#f-away-color').value;
+    g.meta.home.color = $('#f-home-color').value;
   }
   function fillMeta() {
     $('#f-date').value = g.meta.date || new Date().toISOString().slice(0, 10);
     $('#f-place').value = g.meta.place;
-    $('#f-away').value = g.meta.away;
-    $('#f-home').value = g.meta.home;
-    $('#f-ourside').value = g.meta.ourside;
+    $('#f-away').value = g.meta.away.name;
+    $('#f-home').value = g.meta.home.name;
+    $('#f-away-color').value = g.meta.away.color;
+    $('#f-home-color').value = g.meta.home.color;
   }
-
   function startGame() {
     readMeta();
-    if (!L().length) { toast('Add at least one batter'); return; }
+    if (!g.teams.away.length || !g.teams.home.length) { toast('Both teams need a batting order'); return; }
     g.live = blankLive();
     g.live.started = true;
-    history.length = 0;
+    undoStack.length = 0;
     save();
-    switchTab('score');
+    showView('game');
     renderAll();
-    toast('Play ball! ⚾');
+    clearTokens();
+    toast('Play ball ⚾');
   }
-
-  function endHalf() {
+  function snapshot() {
+    undoStack.push(clone(g.live));
+    if (undoStack.length > 80) undoStack.shift();
+  }
+  function undo() {
+    if (!undoStack.length) { toast('Nothing to undo'); return; }
+    g.live = undoStack.pop();
+    save(); renderAll(); rebuildTokens(); toast('Undid last play');
+  }
+  function endHalf(silent) {
     const lv = g.live;
-    if (isOurTurn()) {
-      // left on base = runners still on
-      const lob = [1, 2, 3].filter(b => lv.bases[b]).length;
-      lv.lobByInning[lv.inning] = (lv.lobByInning[lv.inning] || 0) + lob;
-    }
-    lv.bases = [null, null, null, null];
+    lv.bases = { 1: null, 2: null, 3: null };
     lv.outs = 0;
-    lv.selectedBase = null;
-    if (lv.half === 'top') { lv.half = 'bottom'; }
+    if (lv.half === 'top') lv.half = 'bottom';
     else { lv.half = 'top'; lv.inning += 1; }
     save();
+    if (!silent) { renderAll(); rebuildTokens(); }
   }
 
-  // ---------- core: apply a batting outcome ----------
+  // ---------- the heart: apply one batting outcome ----------
   function applyOutcome(code) {
     const meta = R[code];
-    if (!meta || !isOurTurn()) return;
+    if (!meta || !g.live.started) return;
     const batter = currentBatter();
     if (!batter) return;
     snapshot();
     const lv = g.live;
+    const side = battingSide();
+    const before = { 1: lv.bases[1] && lv.bases[1].paId, 2: lv.bases[2] && lv.bases[2].paId, 3: lv.bases[3] && lv.bases[3].paId };
 
     const pa = {
-      id: uid(), inning: lv.inning, batterId: batter.id, order: lv.batterIdx % L().length,
-      result: code, rbi: 0, reached: 0, finalBase: 0, scored: false, outOnBase: false, sb: 0,
+      id: uid(), side, inning: lv.inning, batterId: batter.id,
+      result: code, rbi: 0, reached: 0, scored: false,
     };
-
+    const scored = [];   // paIds that crossed the plate this play
     let runs = 0;
-    if (meta.out) {
-      lv.outs += 1;
-      if (meta.adv) runs += advanceRunners(meta.adv, false); // sac advances runners
-    } else {
-      runs += placeBatter(pa, meta);
-    }
-    if (!meta.noRbi && (meta.hit || meta.forced || meta.sac)) pa.rbi = runs;
 
+    if (meta.out) {
+      lv.outs += Math.min(meta.out, 3);
+      if (meta.adv && lv.outs < 3) runs += advance(meta.adv, scored); // sac/groundout can plate a run
+    } else if (meta.reach >= 4) {
+      runs += advance(4, scored);                 // runners all score
+      scored.push(pa.id); pa.scored = true; addRun(side);
+      runs += 1;                                  // batter drives in himself too
+    } else if (meta.forced) {
+      runs += forcePush(scored);
+      lv.bases[meta.reach] = mkRunner(pa, batter, side);
+    } else {
+      runs += advance(meta.adv || 0, scored);
+      lv.bases[meta.reach] = mkRunner(pa, batter, side);
+    }
+
+    if (!meta.noRbi && (meta.hit || meta.forced || meta.sac)) pa.rbi = runs;
     lv.pas.push(pa);
-    lv.batterIdx = (lv.batterIdx + 1) % Math.max(L().length, 1);
+    lv.idx[side] = (lv.idx[side] + 1) % Math.max(lineup(side).length, 1);
+
+    const after = { 1: lv.bases[1] && lv.bases[1].paId, 2: lv.bases[2] && lv.bases[2].paId, 3: lv.bases[3] && lv.bases[3].paId };
+    const sideRetired = lv.outs >= 3;
+
+    // ----- build the animation, then commit -----
+    const plan = buildPlan(before, after, scored, pa, meta, side);
+    save();
+    renderScorebar(); renderNowBatting(); renderPlays(); renderBox();
 
     let msg = `${batter.num ? '#' + batter.num + ' ' : ''}${batter.name}: ${meta.label}`;
-    if (runs) msg += ` · ${runs} run${runs > 1 ? 's' : ''}`;
+    if (runs) msg += ` · ${runs} in`;
+    if (sideRetired) msg += ' · side retired';
 
-    if (lv.outs >= 3) { endHalf(); msg += ' · side retired'; }
-    save(); renderAll(); toast(msg);
+    enqueue(async () => {
+      await animatePlan(plan);
+      if (sideRetired) { await wait(280); await sweepTokens(); endHalf(true); renderAll(); }
+    });
+    toast(msg);
   }
 
-  // advance existing runners by n bases (hits) or forced (walks). returns runs scored.
-  function advanceRunners(n, forced) {
-    const lv = g.live;
-    let runs = 0;
-    for (let b = 3; b >= 1; b--) {
-      const r = lv.bases[b];
-      if (!r) continue;
-      let target = forced ? (isForced(b) ? b + 1 : b) : b + n;
-      if (target === b) continue;
-      lv.bases[b] = null;
-      if (target >= 4) { const rpa = paById(r.paId); if (rpa) { rpa.finalBase = 4; rpa.scored = true; } runs++; }
-      else { lv.bases[target] = r; const rpa = paById(r.paId); if (rpa) rpa.finalBase = target; }
+  function mkRunner(pa, batter, side) { return { paId: pa.id, batterId: batter.id, side, num: batter.num }; }
+
+  // advance every runner n bases (hits / sac). returns runs scored.
+  function advance(n, scored) {
+    if (!n) return 0;
+    const lv = g.live; let runs = 0; const nb = { 1: null, 2: null, 3: null };
+    for (const b of [1, 2, 3]) {
+      const r = lv.bases[b]; if (!r) continue;
+      const t = b + n;
+      if (t >= 4) { runs++; scored.push(r.paId); markScored(r.paId); addRun(r.side); }
+      else nb[t] = r;
     }
-    return runs;
+    lv.bases = nb; return runs;
   }
-  function isForced(b) {
-    const bs = g.live.bases;
-    if (b === 1) return true;          // batter forces runner on 1st
-    if (b === 2) return !!bs[1];
-    if (b === 3) return !!bs[1] && !!bs[2];
-    return false;
-  }
-
-  function placeBatter(pa, meta) {
-    const lv = g.live;
-    let runs = advanceRunners(meta.adv || 1, !!meta.forced);
-    if (meta.reach >= 4) { pa.finalBase = 4; pa.scored = true; runs++; } // HR
-    else { lv.bases[meta.reach] = { paId: pa.id }; pa.reached = meta.reach; pa.finalBase = meta.reach; }
-    return runs;
-  }
-
-  // ---------- runner adjustments (steals, extra bases, base outs) ----------
-  function runnerAction(action) {
-    const lv = g.live;
-    const b = lv.selectedBase;
-    const r = b && lv.bases[b];
-    if (!r) { closeSheets(); return; }
-    snapshot();
-    const rpa = paById(r.paId);
-
-    if (action === 'out') {
-      lv.bases[b] = null;
-      if (rpa) rpa.outOnBase = true;
-      lv.outs += 1;
-      if (lv.outs >= 3) { endHalf(); toast('Out on bases · side retired'); }
-      else toast('Out on the bases');
-    } else if (action === 'home' || action === 'steal-home') {
-      lv.bases[b] = null;
-      if (rpa) { rpa.finalBase = 4; rpa.scored = true; if (action === 'steal-home') rpa.sb = (rpa.sb || 0) + 1; }
-      toast('Run scored! 🏠');
-    } else if (action === '1' || action === 'steal') {
-      const t = b + 1;
-      if (t >= 4) { lv.bases[b] = null; if (rpa) { rpa.finalBase = 4; rpa.scored = true; } toast('Run scored! 🏠'); }
-      else if (lv.bases[t]) { history.pop(); toast('Next base is occupied'); closeSheets(); return; }
-      else { lv.bases[b] = null; lv.bases[t] = r; if (rpa) rpa.finalBase = t; toast(action === 'steal' ? 'Stolen base' : 'Runner advanced'); }
-      if (action === 'steal' && rpa) rpa.sb = (rpa.sb || 0) + 1;
-    } else if (action === 'back') {
-      const t = b - 1;
-      if (t < 1 || lv.bases[t]) { history.pop(); closeSheets(); return; }
-      lv.bases[b] = null; lv.bases[t] = r; if (rpa) rpa.finalBase = t;
-    }
-    lv.selectedBase = null;
-    closeSheets();
-    save(); renderAll();
-  }
-
-  function undo() {
-    if (!history.length) { toast('Nothing to undo'); return; }
-    g.live = history.pop();
-    save(); renderAll(); toast('Undid last play');
-  }
-
-  // ---------- defense (opponent batting) ----------
-  function oppRun() {
-    snapshot();
-    const i = g.live.inning;
-    g.live.oppRunsByInning[i] = (g.live.oppRunsByInning[i] || 0) + 1;
-    save(); renderAll(); toast('Opponent run');
-  }
-  function oppOut() {
-    snapshot();
-    g.live.outs += 1;
-    if (g.live.outs >= 3) { endHalf(); toast('3 outs — our at-bat'); }
-    else toast(`Out (${g.live.outs}/3)`);
-    save(); renderAll();
-  }
-
-  // =========================================================================
-  //  RENDER
-  // =========================================================================
-  function renderAll() {
-    renderScoreboard();
-    renderScore();
-    renderCard();
-    renderStats();
-  }
-
-  function totals() {
-    const our = g.live.pas.filter(p => p.scored).length;
-    const opp = Object.values(g.live.oppRunsByInning).reduce((a, b) => a + b, 0);
-    return { our, opp };
-  }
-
-  function renderScoreboard() {
-    const sb = $('#scoreboard');
-    if (!g.live.started) { sb.classList.add('hidden'); return; }
-    const t = totals();
-    const awayRuns = g.meta.ourside === 'away' ? t.our : t.opp;
-    const homeRuns = g.meta.ourside === 'home' ? t.our : t.opp;
-    $('#sb-away .sb-name').textContent = g.meta.away;
-    $('#sb-home .sb-name').textContent = g.meta.home;
-    $('#sb-away .sb-runs').textContent = awayRuns;
-    $('#sb-home .sb-runs').textContent = homeRuns;
-    const battingHome = g.live.half === 'bottom';
-    $('#sb-away').classList.toggle('atbat', !battingHome);
-    $('#sb-home').classList.toggle('atbat', battingHome);
-    $('#sb-inning').textContent = (g.live.half === 'top' ? '▲ Top ' : '▼ Bot ') + g.live.inning;
-    $('#sb-outs').textContent = g.live.outs + ' out';
-  }
-
-  function renderScore() {
-    const tab = $('#tab-score');
-    const offense = ['.now-batting', '.diamond-wrap', '#outcomes'];
-    let dp = $('#defense-panel');
-
-    if (!g.live.started) {
-      offense.forEach(s => $(s).classList.add('hidden'));
-      if (dp) dp.classList.add('hidden');
-      if (!$('#score-empty')) {
-        const e = document.createElement('div');
-        e.id = 'score-empty'; e.className = 'panel center';
-        e.innerHTML = '<p class="hint" style="margin:0">No game yet. Build your lineup in <b>Setup</b> and tap <b>Start game</b>.</p>';
-        tab.prepend(e);
+  // forced push for walks/HBP/FC: only chained runners move.
+  function forcePush(scored) {
+    const lv = g.live; let runs = 0;
+    if (lv.bases[1]) {
+      if (lv.bases[2]) {
+        if (lv.bases[3]) { runs++; scored.push(lv.bases[3].paId); markScored(lv.bases[3].paId); addRun(lv.bases[3].side); }
+        lv.bases[3] = lv.bases[2];
       }
-      return;
+      lv.bases[2] = lv.bases[1];
+      lv.bases[1] = null;
     }
-    const empty = $('#score-empty'); if (empty) empty.remove();
+    return runs;
+  }
+  function addRun(side) { g.live.runs[side] += 1; }
+  function markScored(paId) { const p = paById(paId); if (p) p.scored = true; }
 
-    if (isOurTurn()) {
-      offense.forEach(s => $(s).classList.remove('hidden'));
-      if (dp) dp.classList.add('hidden');
-      renderNowBatting();
-      renderDiamond();
-    } else {
-      offense.forEach(s => $(s).classList.add('hidden'));
-      renderDefense();
+  // ---------- manual runner actions (tap a token) ----------
+  function runnerAction(paId, action) {
+    const lv = g.live;
+    let base = null;
+    for (const b of [1, 2, 3]) if (lv.bases[b] && lv.bases[b].paId === paId) base = b;
+    if (base == null) { hidePop(); return; }
+    snapshot();
+    const r = lv.bases[base];
+    const plan = { journeys: [], scoreBump: null };
+    if (action === 'out') {
+      lv.bases[base] = null;
+      lv.outs += 1;
+      plan.journeys.push({ paId, from: base, to: base, exit: 'out' });
+      if (lv.outs >= 3) {
+        save(); renderScorebar(); renderPlays();
+        enqueue(async () => { await animatePlan(plan); await wait(200); await sweepTokens(); endHalf(true); renderAll(); });
+        hidePop(); toast('Out on the bases · side retired'); return;
+      }
+    } else if (action === 'score' || (action === 'adv' && base === 3) || (action === 'steal' && base === 3)) {
+      lv.bases[base] = null;
+      markScored(paId); addRun(r.side);
+      plan.journeys.push({ paId, from: base, to: 4, exit: 'score' });
+      plan.scoreBump = r.side;
+    } else if (action === 'adv' || action === 'steal') {
+      const t = base + 1;
+      if (lv.bases[t]) { hidePop(); toast('Base is occupied'); undoStack.pop(); return; }
+      lv.bases[t] = r; lv.bases[base] = null;
+      plan.journeys.push({ paId, from: base, to: t });
+    } else if (action === 'back') {
+      const t = base - 1;
+      if (t < 1 || lv.bases[t]) { hidePop(); undoStack.pop(); return; }
+      lv.bases[t] = r; lv.bases[base] = null;
+      plan.journeys.push({ paId, from: base, to: t });
     }
+    save(); renderScorebar(); renderNowBatting(); renderPlays(); renderBox();
+    enqueue(() => animatePlan(plan));
+    hidePop();
+    const label = { steal: 'Stolen base', adv: 'Advanced', back: 'Back a base', score: 'Run scores', out: 'Out on the bases' }[action] || 'Done';
+    toast(label);
+  }
+
+  // =========================================================================
+  //  THE DIAMOND — canvas field + animated runner tokens
+  // =========================================================================
+  const BASE_XY = { 0: [50, 86], 1: [82, 54], 2: [50, 22], 3: [18, 54], 4: [50, 86] }; // % of stage
+  let canvas, ctx, stage;
+
+  function drawField() {
+    if (!canvas) return;
+    const rect = stage.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const w = Math.max(rect.width, 1), h = Math.max(rect.height, 1);
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const X = (p) => (p / 100) * w, Y = (p) => (p / 100) * h;
+    const [hx, hy] = BASE_XY[0], [fx, fy] = BASE_XY[1], [sx, sy] = BASE_XY[2], [tx, ty] = BASE_XY[3];
+
+    // grass field (rounded) + dusk vignette
+    const grass = ctx.createRadialGradient(X(50), Y(60), X(8), X(50), Y(55), X(75));
+    grass.addColorStop(0, '#3a7d51'); grass.addColorStop(1, '#244f33');
+    roundRect(ctx, 0, 0, w, h, X(5)); ctx.fillStyle = grass; ctx.fill();
+
+    // mowing arcs
+    ctx.save(); ctx.clip(); ctx.globalAlpha = .08; ctx.strokeStyle = '#fff'; ctx.lineWidth = X(3.4);
+    for (let r = 16; r < 90; r += 11) { ctx.beginPath(); ctx.arc(X(hx), Y(hy), X(r), Math.PI, 2 * Math.PI); ctx.stroke(); }
+    ctx.restore();
+
+    // outfield foul-territory wedge darker outside the lines
+    ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.16)';
+    ctx.beginPath(); ctx.moveTo(X(hx), Y(hy)); ctx.lineTo(0, 0); ctx.lineTo(0, h); ctx.lineTo(X(hx), Y(hy)); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(X(hx), Y(hy)); ctx.lineTo(w, 0); ctx.lineTo(w, h); ctx.lineTo(X(hx), Y(hy)); ctx.fill();
+    ctx.restore();
+
+    // infield clay (diamond) with a little grass center
+    const clay = ctx.createLinearGradient(0, Y(20), 0, Y(90));
+    clay.addColorStop(0, '#c5774a'); clay.addColorStop(1, '#a85c34');
+    ctx.fillStyle = clay;
+    polygon(ctx, [[X(hx), Y(hy)], [X(fx), Y(fy)], [X(sx), Y(sy)], [X(tx), Y(ty)]]);
+    ctx.fill();
+
+    // grass infield patch
+    ctx.fillStyle = grass;
+    const k = 0.46;
+    polygon(ctx, [
+      [X(hx), Y(hy - (hy - sy) * 0)], // keep home corner clay (dirt around plate)
+      [lerp(X(hx), X(fx), k), lerp(Y(hy), Y(fy), k)],
+      [X(sx), lerp(Y(sy), Y(hy), 1 - k * 1.1)],
+      [lerp(X(hx), X(tx), k), lerp(Y(hy), Y(ty), k)],
+    ]);
+    ctx.fill();
+
+    // chalk foul lines (home past 1B and 3B to the corners)
+    ctx.strokeStyle = 'rgba(237,232,218,.9)'; ctx.lineWidth = X(0.9); ctx.lineCap = 'round';
+    line(ctx, X(hx), Y(hy), X(hx) + (X(fx) - X(hx)) * 2.2, Y(hy) + (Y(fy) - Y(hy)) * 2.2);
+    line(ctx, X(hx), Y(hy), X(hx) + (X(tx) - X(hx)) * 2.2, Y(hy) + (Y(ty) - Y(hy)) * 2.2);
+
+    // base paths (diamond edges)
+    ctx.lineWidth = X(0.7); ctx.strokeStyle = 'rgba(237,232,218,.55)';
+    polygon(ctx, [[X(hx), Y(hy)], [X(fx), Y(fy)], [X(sx), Y(sy)], [X(tx), Y(ty)]]); ctx.stroke();
+
+    // pitcher's mound
+    ctx.fillStyle = '#bf7048'; ctx.beginPath(); ctx.arc(X(50), Y(55), X(6.5), 0, 7); ctx.fill();
+    ctx.fillStyle = '#e9e3d6'; ctx.fillRect(X(48.6), Y(54.2), X(2.8), Y(1.2));
+
+    // bases (white squares) + home plate
+    drawBase(ctx, X(fx), Y(fy), X(4)); drawBase(ctx, X(sx), Y(sy), X(4)); drawBase(ctx, X(tx), Y(tx === tx ? ty : ty), X(4));
+    drawBase(ctx, X(tx), Y(ty), X(4));
+    drawHome(ctx, X(hx), Y(hy), X(4.4));
+  }
+  function drawBase(c, x, y, s) { c.save(); c.translate(x, y); c.rotate(Math.PI / 4); c.fillStyle = '#f4efe3'; c.shadowColor = 'rgba(0,0,0,.4)'; c.shadowBlur = 6; c.fillRect(-s / 2, -s / 2, s, s); c.restore(); }
+  function drawHome(c, x, y, s) { c.save(); c.fillStyle = '#f4efe3'; c.shadowColor = 'rgba(0,0,0,.4)'; c.shadowBlur = 6; c.beginPath(); c.moveTo(x - s, y - s * .5); c.lineTo(x + s, y - s * .5); c.lineTo(x + s, y + s * .2); c.lineTo(x, y + s); c.lineTo(x - s, y + s * .2); c.closePath(); c.fill(); c.restore(); }
+  function polygon(c, pts) { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); }
+  function line(c, x1, y1, x2, y2) { c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); }
+  function roundRect(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  // ----- runner tokens -----
+  const tokenEls = {}; // paId -> element
+  function clearTokens() { $('#runner-layer').innerHTML = ''; for (const k in tokenEls) delete tokenEls[k]; }
+  function setCoord(el, base) {
+    const [x, y] = BASE_XY[base];
+    el.style.left = x + '%'; el.style.top = y + '%';
+    el.dataset.base = base;
+  }
+  function makeToken(paId, base, side, num) {
+    const el = document.createElement('div');
+    el.className = 'runner ' + side + ' enter';
+    el.style.setProperty('--c', teamColor(side));
+    el.innerHTML = `<span class="runner-num">${num ? esc(num) : '•'}</span>`;
+    setCoord(el, base);
+    el.addEventListener('click', (e) => { e.stopPropagation(); openPop(paId, el); });
+    el.addEventListener('animationend', () => el.classList.remove('enter'), { once: true });
+    $('#runner-layer').appendChild(el);
+    tokenEls[paId] = el;
+    return el;
+  }
+  // Build a movement plan by diffing base occupancy before/after.
+  function buildPlan(before, after, scored, batterPa, meta, side) {
+    const journeys = [];
+    const baseOf = (map, paId) => { for (const b of [1, 2, 3]) if (map[b] === paId) return +b; return null; };
+    const seen = new Set();
+    // runners that scored
+    scored.forEach(paId => {
+      if (paId === batterPa.id) return; // batter handled below
+      const from = baseOf(before, paId) ?? 0;
+      journeys.push({ paId, from, to: 4, exit: 'score', side });
+      seen.add(paId);
+    });
+    // runners still on base whose base changed (or unchanged — set anyway)
+    for (const b of [1, 2, 3]) {
+      const paId = after[b]; if (!paId || seen.has(paId)) continue;
+      if (paId === batterPa.id) continue;
+      const from = baseOf(before, paId) ?? 0;
+      journeys.push({ paId, from, to: b, side });
+      seen.add(paId);
+    }
+    // the batter
+    if (batterPa.scored) {
+      journeys.push({ paId: batterPa.id, from: 0, to: 4, exit: 'score', side, batter: true });
+    } else {
+      const b = baseOf(after, batterPa.id);
+      if (b) journeys.push({ paId: batterPa.id, from: 0, to: b, side, batter: true });
+    }
+    return { journeys, scoreBump: scored.length ? side : null };
+  }
+
+  async function animatePlan(plan) {
+    if (!plan || !plan.journeys.length) { if (plan && plan.scoreBump) bumpScore(plan.scoreBump); return; }
+    if (plan.scoreBump) bumpScore(plan.scoreBump);
+    await Promise.all(plan.journeys.map((j, i) => journey(j, i * 70)));
+  }
+  async function journey(j, delay) {
+    if (delay) await wait(delay);
+    let el = tokenEls[j.paId];
+    if (!el) {
+      const r = j.exit === 'score' ? null : g.live.bases[j.to];
+      const num = j.batter ? (playerById(paById(j.paId)?.batterId)?.num) : (r ? r.num : numFromPa(j.paId));
+      el = makeToken(j.paId, j.from, j.side, num);
+      await wait(40);
+    }
+    const from = +el.dataset.base;
+    const to = j.to;
+    if (to >= from) { for (let b = from + 1; b <= to; b++) { setCoord(el, b); await wait(STEP); } }
+    else { for (let b = from - 1; b >= to; b--) { setCoord(el, b); await wait(STEP); } }
+    if (to === from) await wait(60);
+    if (j.exit === 'score') { el.classList.add('scoring'); await wait(260); el.remove(); delete tokenEls[j.paId]; }
+    else if (j.exit === 'out') { el.classList.add('thrown-out'); await wait(260); el.remove(); delete tokenEls[j.paId]; }
+  }
+  function numFromPa(paId) { const pa = paById(paId); return pa ? (playerById(pa.batterId)?.num) : ''; }
+  function bumpScore(side) {
+    const el = $('#sb-' + side + '-runs');
+    el.textContent = g.live.runs[side];
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+  }
+  async function sweepTokens() {
+    const els = Object.values(tokenEls);
+    if (!els.length) return;
+    els.forEach(el => { el.classList.add('thrown-out'); });
+    await wait(240);
+    els.forEach(el => el.remove());
+    for (const k in tokenEls) delete tokenEls[k];
+  }
+  // rebuild tokens straight from state (after undo / half change / resume)
+  function rebuildTokens() {
+    clearTokens();
+    for (const b of [1, 2, 3]) {
+      const r = g.live.bases[b]; if (!r) continue;
+      makeToken(r.paId, b, r.side, r.num);
+    }
+  }
+  let resizeRAF;
+  function onResize() { cancelAnimationFrame(resizeRAF); resizeRAF = requestAnimationFrame(drawField); }
+
+  // ----- runner quick-action popover -----
+  function openPop(paId, el) {
+    popPaId = paId;
+    const pop = $('#runner-pop');
+    pop.style.left = el.style.left; pop.style.top = el.style.top;
+    pop.innerHTML =
+      `<button class="pop-btn" data-act="steal">Steal</button>` +
+      `<button class="pop-btn" data-act="adv">+1</button>` +
+      `<button class="pop-btn score" data-act="score">Score</button>` +
+      `<button class="pop-btn out" data-act="out">Out</button>` +
+      `<button class="pop-btn" data-act="back">−1</button>`;
+    pop.classList.remove('hidden');
+  }
+  function hidePop() { popPaId = null; $('#runner-pop').classList.add('hidden'); }
+
+  // animation queue so rapid taps don't collide
+  function enqueue(fn) { animChain = animChain.then(fn).catch(e => console.error(e)); return animChain; }
+
+  // =========================================================================
+  //  RENDER — scoreboard, now batting, plays, box
+  // =========================================================================
+  function renderAll() { renderScorebar(); renderNowBatting(); renderPlays(); renderBox(); }
+
+  function renderScorebar() {
+    const lv = g.live, bs = battingSide();
+    document.documentElement.style.setProperty('--turn', teamColor(bs));
+    $('#brand-name').textContent = teamName('home');
+    document.documentElement.style.setProperty('--home', g.meta.home.color);
+    document.documentElement.style.setProperty('--away', g.meta.away.color);
+    $('#sb-away-abbr').textContent = abbr(teamName('away'));
+    $('#sb-home-abbr').textContent = abbr(teamName('home'));
+    $('#sb-away-runs').textContent = lv.runs.away;
+    $('#sb-home-runs').textContent = lv.runs.home;
+    $('#sb-away').classList.toggle('batting', bs === 'away');
+    $('#sb-home').classList.toggle('batting', bs === 'home');
+    const arrow = lv.half === 'top' ? '▲' : '▼';
+    $('#sb-half').textContent = `${arrow} ${ordinal(lv.inning)}`;
+    $$('.out-dot').forEach(d => d.classList.toggle('on', +d.dataset.o <= lv.outs));
+    $('#sb-outs-label').textContent = lv.outs === 1 ? '1 out' : `${lv.outs} out`;
+    $('#scorebar').classList.toggle('hidden', !lv.started);
   }
 
   function renderNowBatting() {
     const b = currentBatter();
-    if (!b) return;
-    $('#nb-num').textContent = b.num ? '#' + b.num : '#—';
-    $('#nb-name').textContent = b.name;
-    $('#nb-pos').textContent = b.pos || '';
-    $('#nb-pos').style.display = b.pos ? '' : 'none';
-    const onBase = [1, 2, 3].filter(x => g.live.bases[x]).length;
-    const ord = (g.live.batterIdx % L().length) + 1;
-    $('#nb-order').textContent = `${ordinal(ord)} in order · ${onBase} on · ${g.live.outs} out`;
+    $('#nb-eyebrow').textContent = `Now batting · ${teamName(battingSide())}`;
+    $('#nb-jersey').textContent = b ? (b.num ? '#' + b.num : '·') : '—';
+    $('#nb-name').textContent = b ? b.name : '—';
+    $('#nb-pos').textContent = b && b.pos ? b.pos : '';
+    const d = onDeck();
+    $('#nb-deck').textContent = d ? `On deck: ${d.num ? '#' + d.num + ' ' : ''}${d.name}` : '';
   }
 
-  function renderDiamond() {
-    const bs = g.live.bases;
-    [1, 2, 3].forEach(b => {
-      const el = $('.base-' + b);
-      const occ = !!bs[b];
-      el.classList.toggle('occupied', occ);
-      // label
-      let lbl = el.querySelector('.runner-label');
-      if (occ) {
-        const pa = paById(bs[b].paId);
-        const pl = pa && playerById(pa.batterId);
-        const text = pl ? (pl.num ? '#' + pl.num : pl.name.split(' ')[0]) : '';
-        if (!lbl) { lbl = document.createElement('span'); lbl.className = 'runner-label'; el.appendChild(lbl); }
-        lbl.textContent = text;
-      } else if (lbl) { lbl.remove(); }
+  function renderPlays() {
+    const wrap = $('#plays');
+    const lv = g.live;
+    if (!lv.pas.length) { wrap.innerHTML = `<p class="empty">No plays yet — tap an outcome on the Game tab to start the log.</p>`; return; }
+    // group by inning+half, newest first
+    const groups = [];
+    lv.pas.forEach(pa => {
+      const key = pa.inning + (pa.side === 'away' ? 'T' : 'B');
+      let grp = groups.find(x => x.key === key);
+      if (!grp) { grp = { key, inning: pa.inning, side: pa.side, pas: [] }; groups.push(grp); }
+      grp.pas.push(pa);
     });
-    const anyOn = [1, 2, 3].some(b => bs[b]);
-    $('#runner-tip').textContent = anyOn ? 'Tap a runner to advance, steal, or call out' : 'Bases empty';
-  }
-
-  function renderDefense() {
-    const tab = $('#tab-score');
-    let dp = $('#defense-panel');
-    if (!dp) {
-      dp = document.createElement('div');
-      dp.id = 'defense-panel'; dp.className = 'panel center';
-      tab.prepend(dp);
-    }
-    dp.classList.remove('hidden');
-    const oppName = g.meta.ourside === 'home' ? g.meta.away : g.meta.home;
-    const runsThis = g.live.oppRunsByInning[g.live.inning] || 0;
-    dp.innerHTML =
-      `<h2 style="margin-bottom:6px">On defense</h2>` +
-      `<p class="hint" style="margin-bottom:14px"><b>${escapeHtml(oppName)}</b> batting · ${g.live.outs} out · ${runsThis} run${runsThis !== 1 ? 's' : ''} this inning</p>` +
-      `<div class="og-buttons" style="grid-template-columns:1fr 1fr">` +
-        `<button class="oc hit" id="d-run" style="background:#fdecec;color:var(--red);border-color:#f3c2c2">+1 Run allowed</button>` +
-        `<button class="oc out" id="d-out">Out (${g.live.outs}/3)</button>` +
-      `</div>` +
-      `<button class="ghost-btn" id="d-undo" style="margin-top:10px">↶ Undo</button>`;
-    $('#d-run').addEventListener('click', oppRun);
-    $('#d-out').addEventListener('click', oppOut);
-    $('#d-undo').addEventListener('click', undo);
-  }
-
-  // ---------- mini scorecard diamond (SVG) ----------
-  function paMini(pa) {
-    const pts = { 0: [50, 90], 1: [90, 50], 2: [50, 10], 3: [10, 50], 4: [50, 90] };
-    let path = '';
-    const fb = pa.finalBase;
-    const seg = (a, b) => `<line x1="${pts[a][0]}" y1="${pts[a][1]}" x2="${pts[b][0]}" y2="${pts[b][1]}" stroke="#c8102e" stroke-width="4" stroke-linecap="round"/>`;
-    if (fb >= 1) path += seg(0, 1);
-    if (fb >= 2) path += seg(1, 2);
-    if (fb >= 3) path += seg(2, 3);
-    if (fb >= 4) path += `<line x1="10" y1="50" x2="50" y2="90" stroke="#c8102e" stroke-width="4" stroke-linecap="round"/>`;
-    const fill = pa.scored ? `<polygon points="50,86 86,50 50,14 14,50" fill="rgba(31,122,61,.18)" stroke="#1f7a3d" stroke-width="2"/>` : '';
-    const out = pa.outOnBase ? `<circle cx="50" cy="50" r="5" fill="#0a0a0a"/>` : '';
-    return `<div class="pa-mini">` +
-      `<svg viewBox="0 0 100 100"><polygon points="50,90 90,50 50,10 10,50" fill="none" stroke="#c9ccd2" stroke-width="2"/>${fill}${path}${out}</svg>` +
-      `<span class="pa-code">${TAG[pa.result] || ''}</span>` +
-      (pa.rbi ? `<span class="pa-rbi">${pa.rbi}rbi</span>` : '') +
-      (pa.sb ? `<span class="pa-out">${pa.sb}sb</span>` : '') +
-      `</div>`;
-  }
-
-  function maxInning() {
-    let m = 6;
-    g.live.pas.forEach(p => { if (p.inning > m) m = p.inning; });
-    Object.keys(g.live.oppRunsByInning).forEach(k => { if (+k > m) m = +k; });
-    if (g.live.started) m = Math.max(m, g.live.inning);
-    return Math.max(m, 6);
-  }
-
-  function renderCard() {
-    const table = $('#scorecard');
-    const innings = maxInning();
-    const cols = [];
-    for (let i = 1; i <= innings; i++) cols.push(i);
-
-    let head = '<thead><tr><th class="col-name">Batter</th>';
-    cols.forEach(i => head += `<th>${i}</th>`);
-    head += '<th>AB</th><th>R</th><th>H</th><th>RBI</th><th>SO</th><th>BB</th><th>E</th><th>SB</th></tr></thead>';
-
-    const st = deriveStats(innings);
-    let body = '<tbody>';
-    L().forEach(p => {
-      const s = st.players[p.id];
-      body += `<tr><td class="col-name"><span class="num">${p.num ? '#' + p.num : ''}</span>${escapeHtml(p.name)}${p.pos ? ' <small style="color:#888">' + p.pos + '</small>' : ''}</td>`;
-      cols.forEach(i => {
-        const cell = g.live.pas.filter(pa => pa.batterId === p.id && pa.inning === i);
-        body += `<td class="pa-cell">${cell.map(paMini).join('')}</td>`;
+    let html = '';
+    groups.slice().reverse().forEach(grp => {
+      const arrow = grp.side === 'away' ? '▲ Top' : '▼ Bot';
+      const runsThis = grp.pas.filter(p => p.scored).length;
+      html += `<div class="play-half"><div class="ph-label"><span>${arrow} ${ordinal(grp.inning)} · ${esc(teamName(grp.side))}</span>` +
+        `<span class="ph-runs">${runsThis ? runsThis + (runsThis === 1 ? ' run' : ' runs') : ''}</span></div>`;
+      grp.pas.slice().reverse().forEach(pa => {
+        const pl = playerById(pa.batterId);
+        const meta = R[pa.result];
+        const rbi = pa.rbi ? `<span class="play-rbi">${pa.rbi} RBI</span>` : '';
+        const scored = pa.scored ? ' <b>— scored</b>' : '';
+        html += `<div class="play ${grp.side}"><span class="play-tag">${meta.tag}</span>` +
+          `<span class="play-text"><span class="play-jersey">${pl && pl.num ? '#' + esc(pl.num) + ' ' : ''}</span>${esc(pl ? pl.name : '—')} — ${esc(meta.label)}${scored}</span>${rbi}</div>`;
       });
-      body += `<td class="stat-cell">${s.ab}</td><td class="stat-cell">${s.r}</td><td class="stat-cell">${s.h}</td>` +
-              `<td class="stat-cell">${s.rbi}</td><td class="stat-cell">${s.so}</td><td class="stat-cell">${s.bb}</td>` +
-              `<td class="stat-cell">${s.e}</td><td class="stat-cell">${s.sb}</td></tr>`;
+      html += `</div>`;
+    });
+    wrap.innerHTML = html;
+    const first = wrap.querySelector('.play');
+    if (first) first.classList.add('fresh');
+  }
+
+  function renderBox() {
+    renderLinescore();
+    renderBatting('away'); renderBatting('home');
+    $('#box-away-title').textContent = `${teamName('away')} — batting`;
+    $('#box-home-title').textContent = `${teamName('home')} — batting`;
+  }
+  function renderLinescore() {
+    const lv = g.live;
+    const innings = Math.max(lv.inning, 1);
+    const rbi = { away: {}, home: {} }, hbi = { away: {}, home: {} }, ebi = { away: {}, home: {} };
+    lv.pas.forEach(pa => {
+      const meta = R[pa.result];
+      if (pa.scored) rbi[pa.side][pa.inning] = (rbi[pa.side][pa.inning] || 0) + 1;
+      if (meta.hit) hbi[pa.side][pa.inning] = (hbi[pa.side][pa.inning] || 0) + 1;
+      if (meta.roe) { const f = pa.side === 'away' ? 'home' : 'away'; ebi[f][pa.inning] = (ebi[f][pa.inning] || 0) + 1; }
+    });
+    const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+    let head = '<thead><tr><th class="team"></th>';
+    for (let i = 1; i <= innings; i++) head += `<th>${i}</th>`;
+    head += '<th class="tot">R</th><th class="tot">H</th><th class="tot">E</th></tr></thead>';
+    let body = '<tbody>';
+    ['away', 'home'].forEach(side => {
+      body += `<tr class="${side}"><td class="team">${esc(abbr(teamName(side)))}</td>`;
+      for (let i = 1; i <= innings; i++) {
+        const isFuture = (side === 'home' && i === lv.inning && lv.half === 'top');
+        body += `<td>${isFuture ? '·' : (rbi[side][i] || 0)}</td>`;
+      }
+      body += `<td class="tot">${lv.runs[side]}</td><td class="tot">${sum(hbi[side])}</td><td class="tot">${sum(ebi[side])}</td></tr>`;
     });
     body += '</tbody>';
-
-    // footer R/H/E/LOB per inning
-    const rows = [['R', 'r'], ['H', 'h'], ['E', 'e'], ['LOB', 'lob']];
-    let foot = '<tfoot>';
-    rows.forEach(([lbl, key]) => {
-      foot += `<tr><td class="rowlbl">${lbl}</td>`;
-      cols.forEach(i => foot += `<td>${st.inning[i][key] || 0}</td>`);
-      foot += `<td colspan="8"></td></tr>`;
-    });
-    foot += '</tfoot>';
-
-    table.innerHTML = head + body + foot;
+    $('#linescore').innerHTML = head + body;
   }
-
-  function deriveStats(innings) {
-    const players = {};
-    L().forEach(p => players[p.id] = { ab:0,r:0,h:0,rbi:0,so:0,bb:0,hbp:0,e:(g.live.errByPlayer[p.id]||0),sb:0,pa:0 });
-    const inning = {};
-    for (let i = 1; i <= (innings || maxInning()); i++) inning[i] = { r:0,h:0,e:0,lob:(g.live.lobByInning[i]||0) };
-
+  function renderBatting(side) {
+    const lu = g.teams[side];
+    const stat = {};
+    lu.forEach(p => stat[p.id] = { ab: 0, r: 0, h: 0, rbi: 0, bb: 0, so: 0 });
     g.live.pas.forEach(pa => {
-      const s = players[pa.batterId]; if (!s) return;
+      if (pa.side !== side) return; const s = stat[pa.batterId]; if (!s) return;
       const m = R[pa.result];
-      s.pa++;
-      if (m.ab) s.ab++;
-      if (m.hit) { s.h++; if (inning[pa.inning]) inning[pa.inning].h++; }
-      if (m.so) s.so++;
-      if (m.bb) s.bb++;
-      if (m.hbp) s.hbp++;
-      s.rbi += pa.rbi || 0;
-      s.sb += pa.sb || 0;
-      if (pa.scored) { s.r++; if (inning[pa.inning]) inning[pa.inning].r++; }
+      if (m.ab) s.ab++; if (m.hit) s.h++; if (m.bb) s.bb++; if (m.so) s.so++;
+      if (pa.scored) s.r++; s.rbi += pa.rbi || 0;
     });
-    return { players, inning };
-  }
-
-  function renderStats() {
-    const innings = maxInning();
-    const st = deriveStats(innings);
-
-    // batting box
-    let b = '<thead><tr><th class="name">Batter</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>SO</th><th>BB</th><th>E</th><th>SB</th></tr></thead><tbody>';
-    const tot = { ab:0,r:0,h:0,rbi:0,so:0,bb:0,hbp:0,e:0,sb:0 };
-    L().forEach(p => {
-      const s = st.players[p.id];
-      ['ab','r','h','rbi','so','bb','hbp','e','sb'].forEach(k => tot[k] += (s[k]||0));
-      b += `<tr><td class="name"><span style="color:var(--red);font-weight:800">${p.num ? '#'+p.num+' ' : ''}</span>${escapeHtml(p.name)}</td>` +
-        `<td>${s.ab}</td><td>${s.r}</td><td>${s.h}</td><td>${s.rbi}</td><td>${s.so}</td><td>${s.bb}</td>` +
-        `<td><input class="stat-in" data-eid="${p.id}" inputmode="numeric" value="${s.e}"></td><td>${s.sb}</td></tr>`;
+    let html = '<thead><tr><th class="player">Batter</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>BB</th><th>K</th></tr></thead><tbody>';
+    const tot = { ab: 0, r: 0, h: 0, rbi: 0, bb: 0, so: 0 };
+    lu.forEach(p => {
+      const s = stat[p.id];
+      ['ab', 'r', 'h', 'rbi', 'bb', 'so'].forEach(k => tot[k] += s[k]);
+      html += `<tr><td class="player"><span class="pjersey">${p.num ? '#' + esc(p.num) : ''}</span>${esc(p.name)}</td>` +
+        `<td>${s.ab}</td><td>${s.r}</td><td>${s.h}</td><td>${s.rbi}</td><td>${s.bb}</td><td>${s.so}</td></tr>`;
     });
-    b += '</tbody><tfoot><tr><td class="name">TEAM</td>' +
-      `<td>${tot.ab}</td><td>${tot.r}</td><td>${tot.h}</td><td>${tot.rbi}</td><td>${tot.so}</td>` +
-      `<td>${tot.bb + tot.hbp}<small>bb/hp</small></td><td>${tot.e}</td><td>${tot.sb}</td></tr></tfoot>`;
-    $('#box-batting').innerHTML = b;
-    $$('#box-batting .stat-in').forEach(inp => inp.addEventListener('change', () => {
-      g.live.errByPlayer[inp.dataset.eid] = parseInt(inp.value, 10) || 0; save(); renderCard();
-    }));
-
-    // by inning
-    let ih = '<thead><tr><th class="name"></th>';
-    for (let i = 1; i <= innings; i++) ih += `<th>${i}</th>`;
-    ih += '<th>Tot</th></tr></thead><tbody>';
-    [['Runs','r'],['Hits','h'],['LOB','lob']].forEach(([lbl,key]) => {
-      let sum = 0; ih += `<tr><td class="name">${lbl}</td>`;
-      for (let i = 1; i <= innings; i++) { const v = st.inning[i][key]||0; sum += v; ih += `<td>${v}</td>`; }
-      ih += `<td><b>${sum}</b></td></tr>`;
-    });
-    // opponent runs row
-    let oppSum = 0; ih += `<tr><td class="name">Opp R</td>`;
-    for (let i = 1; i <= innings; i++) { const v = g.live.oppRunsByInning[i]||0; oppSum += v; ih += `<td>${v}</td>`; }
-    ih += `<td><b>${oppSum}</b></td></tr></tbody>`;
-    $('#box-inning').innerHTML = ih;
-
-    // pitchers (editable)
-    renderPitchers();
-  }
-
-  const PCOLS = [['no','#'],['name','Pitcher'],['w','W'],['l','L'],['ip','IP'],['ab','AB'],['r','R'],['er','ER'],['h','H'],['so','SO'],['bb','BB']];
-  function renderPitchers() {
-    let h = '<thead><tr>' + PCOLS.map(([k,l]) => `<th${k==='name'?' class="name"':''}>${l}</th>`).join('') + '</tr></thead><tbody>';
-    g.pitchers.forEach((p, idx) => {
-      h += '<tr>' + PCOLS.map(([k]) =>
-        `<td${k==='name'?' class="name"':''}><input class="stat-in" style="width:${k==='name'?'110px':'42px'}" data-pi="${idx}" data-pk="${k}" value="${escapeHtml(String(p[k]||''))}"></td>`
-      ).join('') + '</tr>';
-    });
-    h += '</tbody>';
-    $('#box-pitchers').innerHTML = h;
-    $$('#box-pitchers .stat-in').forEach(inp => inp.addEventListener('change', () => {
-      g.pitchers[+inp.dataset.pi][inp.dataset.pk] = inp.value; save();
-    }));
-  }
-  function addPitcher() {
-    g.pitchers.push({ no:'',name:'Pitcher',w:'',l:'',ip:'',ab:'',r:'',er:'',h:'',so:'',bb:'' });
-    save(); renderPitchers();
+    html += '</tbody><tfoot><tr><td class="player">Totals</td>' +
+      `<td>${tot.ab}</td><td>${tot.r}</td><td>${tot.h}</td><td>${tot.rbi}</td><td>${tot.bb}</td><td>${tot.so}</td></tr></tfoot>`;
+    $('#box-' + side).innerHTML = html;
   }
 
   // =========================================================================
-  //  NAV / SHEETS / IO
+  //  NAV / MENU / IO
   // =========================================================================
-  function switchTab(name) {
-    $$('.tab').forEach(t => t.classList.add('hidden'));
-    $('#tab-' + name).classList.remove('hidden');
-    $$('.nav-btn').forEach(n => n.classList.toggle('active', n.dataset.tab === name));
-    $('#scoreboard').classList.toggle('hidden', name === 'setup' || !g.live.started);
-    if (name === 'setup') { fillMeta(); }
+  function showView(name) {
+    $$('.view').forEach(v => v.classList.toggle('hidden', v.id !== 'view-' + name));
+    $$('.nav-btn').forEach(n => n.classList.toggle('active', n.dataset.view === name));
+    $('#scorebar').classList.toggle('hidden', name === 'setup' || !g.live.started);
+    if (name === 'setup') { fillMeta(); renderLineup(); }
+    if (name === 'game') { requestAnimationFrame(() => { drawField(); rebuildTokens(); }); }
+    if (name === 'box') renderBox();
+    if (name === 'plays') renderPlays();
+    hidePop();
   }
+  function openSheet() { $('#backdrop').classList.remove('hidden'); $('#menu-sheet').classList.remove('hidden'); }
+  function closeSheet() { $('#backdrop').classList.add('hidden'); $('#menu-sheet').classList.add('hidden'); }
 
-  function openSheet(id) { $('#sheet-backdrop').classList.remove('hidden'); $(id).classList.remove('hidden'); }
-  function closeSheets() {
-    $('#sheet-backdrop').classList.add('hidden');
-    $('#menu-sheet').classList.add('hidden');
-    $('#runner-sheet').classList.add('hidden');
-  }
-
-  function exportGame() {
-    const data = JSON.stringify(g, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    const d = g.meta.date || new Date().toISOString().slice(0,10);
-    a.download = `scorecard-${g.meta.home}-vs-${g.meta.away}-${d}.json`.replace(/\s+/g,'_');
-    a.click(); URL.revokeObjectURL(a.href);
-  }
-  function importGame(file) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        if (!data.lineup || !data.live) throw new Error('bad');
-        g = data; history.length = 0; save();
-        fillMeta(); renderLineup(); renderAll();
-        switchTab(g.live.started ? 'score' : 'setup');
-        toast('Game imported');
-      } catch (e) { toast('Invalid game file'); }
-    };
-    reader.readAsText(file);
-  }
   function newGame() {
-    const keepLineup = L();
-    g = blankGame(); g.lineup = keepLineup;
-    history.length = 0; save();
-    fillMeta(); renderLineup(); renderAll();
-    switchTab('setup'); toast('New game — lineup kept');
+    const keep = { teams: clone(g.teams), meta: clone(g.meta) };
+    g = blankGame(); g.teams = keep.teams; g.meta = keep.meta;
+    undoStack.length = 0; save(); clearTokens();
+    fillMeta(); showView('setup'); renderAll(); toast('New game — rosters kept');
   }
   function resetAll() {
-    if (!confirm('Erase the current game AND saved roster?')) return;
-    try { localStorage.removeItem(STORE); localStorage.removeItem(ROSTER); } catch (e) {}
-    g = blankGame(); g.lineup = seedLineup(); history.length = 0;
-    fillMeta(); renderLineup(); renderAll(); switchTab('setup'); toast('Reset complete');
+    if (!confirm('Erase the current game and saved rosters?')) return;
+    try { localStorage.removeItem(STORE); localStorage.removeItem(ROSTER.away); localStorage.removeItem(ROSTER.home); } catch (e) {}
+    g = blankGame(); undoStack.length = 0; clearTokens();
+    fillMeta(); showView('setup'); renderAll(); toast('Reset complete');
+  }
+  function exportGame() {
+    try {
+      const blob = new Blob([JSON.stringify(g, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `pbp-${(teamName('home') + '-vs-' + teamName('away')).replace(/\s+/g, '_')}-${g.meta.date || 'game'}.json`;
+      a.click(); URL.revokeObjectURL(a.href); toast('Game exported');
+    } catch (e) { toast('Could not export'); }
+  }
+  function importGame(file) {
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const data = JSON.parse(fr.result);
+        if (!data.teams || !data.live) throw new Error('bad');
+        g = data; save(); clearTokens();
+        fillMeta(); showView(g.live.started ? 'game' : 'setup'); renderAll(); rebuildTokens();
+        toast('Game imported');
+      } catch (e) { toast('Could not read that file'); }
+    };
+    fr.readAsText(file);
   }
 
-  // ---------- misc ----------
-  function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
-  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+  // ---------- tiny utils ----------
+  function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function ordinal(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+  function abbr(name) { const w = name.trim().split(/\s+/); if (w.length === 1) return w[0].slice(0, 3).toUpperCase(); return w.map(x => x[0]).join('').slice(0, 3).toUpperCase(); }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
   // =========================================================================
   //  WIRE UP
   // =========================================================================
   function init() {
     load();
+    canvas = $('#field'); ctx = canvas.getContext('2d'); stage = $('.stage-wrap');
+
     fillMeta();
-    renderLineup();
+    showView(g.live.started ? 'game' : 'setup');
     renderAll();
-    switchTab(g.live.started ? 'score' : 'setup');
-    if (g.live.started) $('#btn-resume').classList.remove('hidden');
+    if (g.live.started) rebuildTokens();
 
     // setup
-    $('#btn-add-player').addEventListener('click', addPlayer);
+    $('#btn-add').addEventListener('click', addPlayer);
     $('#np-name').addEventListener('keydown', e => { if (e.key === 'Enter') addPlayer(); });
+    $('#np-num').addEventListener('keydown', e => { if (e.key === 'Enter') $('#np-name').focus(); });
+    $('#btn-fill9').addEventListener('click', fill9);
     $('#btn-save-roster').addEventListener('click', saveRoster);
     $('#btn-load-roster').addEventListener('click', loadRoster);
     $('#btn-start').addEventListener('click', startGame);
-    $('#btn-resume').addEventListener('click', () => switchTab('score'));
-    ['#f-date','#f-place','#f-away','#f-home','#f-ourside'].forEach(s =>
-      $(s).addEventListener('change', () => { readMeta(); save(); renderScoreboard(); }));
+    $$('.team-tab').forEach(t => t.addEventListener('click', () => switchEditTeam(t.dataset.team)));
+    $('#lineup-list').addEventListener('click', e => {
+      const up = e.target.dataset.up, down = e.target.dataset.down, del = e.target.dataset.del;
+      if (up) moveRow(up, -1); else if (down) moveRow(down, 1); else if (del) delRow(del);
+    });
+    ['#f-date', '#f-place', '#f-away', '#f-home', '#f-away-color', '#f-home-color'].forEach(s =>
+      $(s).addEventListener('change', () => { readMeta(); save(); renderScorebar(); renderLineup(); }));
 
     // outcomes
-    $$('#outcomes .oc[data-result]').forEach(btn =>
-      btn.addEventListener('click', () => applyOutcome(btn.dataset.result)));
+    $$('.oc[data-result]').forEach(btn => btn.addEventListener('click', () => applyOutcome(btn.dataset.result)));
     $('#btn-undo').addEventListener('click', undo);
     $('#btn-endhalf').addEventListener('click', () => {
-      if (!g.live.started) return; snapshot(); endHalf(); renderAll(); toast('Half inning ended');
+      if (!g.live.started) return;
+      snapshot();
+      enqueue(async () => { await sweepTokens(); endHalf(true); renderAll(); });
+      toast('Half inning ended');
     });
 
-    // diamond bases
-    [1,2,3].forEach(b => $('.base-' + b).addEventListener('click', () => {
-      if (!g.live.bases[b]) return;
-      g.live.selectedBase = b;
-      const pa = paById(g.live.bases[b].paId);
-      const pl = pa && playerById(pa.batterId);
-      $('#rs-title').textContent = pl ? `${pl.num ? '#'+pl.num+' ' : ''}${pl.name} on ${b===1?'1st':b===2?'2nd':'3rd'}` : 'Runner';
-      openSheet('#runner-sheet');
-    }));
-    $$('#runner-sheet [data-radv]').forEach(btn => btn.addEventListener('click', () => {
-      const a = btn.dataset.radv;
-      if (a === 'close') { closeSheets(); return; }
-      runnerAction(a);
-    }));
-    // add a steal option dynamically isn't needed; map existing: advance=1, etc.
+    // runner popover
+    $('#runner-pop').addEventListener('click', e => { const a = e.target.dataset.act; if (a && popPaId) runnerAction(popPaId, a); });
+    $('.stage-wrap').addEventListener('click', () => hidePop());
 
-    // stats
-    $('#btn-add-pitcher').addEventListener('click', addPitcher);
-
-    // bottom nav
-    $$('.nav-btn').forEach(n => n.addEventListener('click', () => switchTab(n.dataset.tab)));
+    // nav
+    $$('.nav-btn').forEach(n => n.addEventListener('click', () => showView(n.dataset.view)));
 
     // menu
-    $('#btn-menu').addEventListener('click', () => openSheet('#menu-sheet'));
-    $('#sheet-backdrop').addEventListener('click', closeSheets);
+    $('#btn-menu').addEventListener('click', openSheet);
+    $('#backdrop').addEventListener('click', closeSheet);
     $$('#menu-sheet .sheet-item').forEach(it => it.addEventListener('click', () => {
-      const a = it.dataset.action;
-      closeSheets();
+      const a = it.dataset.action; closeSheet();
       if (a === 'new') newGame();
       else if (a === 'export') exportGame();
       else if (a === 'import') $('#import-file').click();
-      else if (a === 'print') { switchTab('card'); setTimeout(() => window.print(), 250); }
       else if (a === 'reset') resetAll();
     }));
     $('#import-file').addEventListener('change', e => { if (e.target.files[0]) importGame(e.target.files[0]); });
-  }
 
+    window.addEventListener('resize', onResize);
+    if (window.ResizeObserver) new ResizeObserver(onResize).observe(stage);
+  }
   document.addEventListener('DOMContentLoaded', init);
 })();

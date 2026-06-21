@@ -1,38 +1,45 @@
-# ⚾ Bloordale 10U A · Scorekeeper
+# ⚾ Bombers · Play-by-Play
 
-A dead-simple, **tap-to-score** digital baseball scorecard for the bench. It turns
-the paper play-by-play sheet into a phone-friendly app: tap what the batter did,
-tap runners to move them around the bases, and the box score, scorecard grid, and
-per-inning R/H/E/LOB fill themselves in.
+A **tap-to-score** baseball scorecard for the bench. Tap what the batter did and
+watch the runners **glide around the bases** on a live diamond — for **both teams**.
+The line score, box score, and play-by-play log fill themselves in.
 
 **Live site:** https://mfiume.github.io/playbyplay/
 
-> Built as a sibling to the WalkUp Music app and the Toronto Eagles hub —
-> same idea: a static site, auto-deployed to GitHub Pages by a GitHub Action.
+> A static site, auto-deployed to GitHub Pages by a GitHub Action.
 > No server, no accounts, no cost.
 
-## Features
+## What it does
 
-- 📋 **Setup** — teams, date, place, and your batting order (drag to reorder, save/load roster)
-- ⚾ **Live scoring** — big outcome buttons (1B/2B/3B/HR, BB/HBP/Error/FC, K/Ground/Fly/Pop, Sac, etc.)
-- 💎 **Interactive diamond** — tap a runner to advance, steal, score, or call out; runners auto-advance on hits
-- 🤖 **Auto stats** — AB, R, H, RBI, SO, BB, SB and per-inning R/H/E/LOB computed for you
-- ▦ **Digital scorecard** — the classic grid with mini diamonds, fills in as you score
-- 📊 **Box score** — batting totals + pitcher lines (editable)
-- ↶ **Undo** any play; ⬇⬆ **export/import** a game as JSON; 🖨 **print** the scorecard
-- 📱 **Installable** (PWA) and works offline once loaded; everything saved on-device
+- **Both teams, full play-by-play.** Away bats the top, home bats the bottom; the
+  app switches sides automatically on the third out and keeps a separate batting
+  order, line score, and box for each.
+- **The diamond is the star.** A rendered clay-and-grass field where each runner is
+  a numbered token that travels base-to-base along the basepaths. Hits auto-advance
+  every runner; a home run trots all the way around.
+- **Tap a runner** for quick actions — steal, take a base, score, send back, or out.
+- **Big outcome buttons** — 1B/2B/3B/HR · BB/HBP/Error/FC · K/Ground/Fly/Pop · Sac/DP.
+- **Auto stats** — AB, R, H, RBI, BB, K per batter; R/H/E by inning on the line score.
+  RBIs and runs are credited automatically on hits, sacs, and forced walks.
+- **Color-coded** — each team has its own color, and the whole interface tints to
+  whoever is batting so you always know whose turn it is.
+- **Undo** any play · **export / import** a game as JSON · **installable** PWA that
+  works offline; everything is saved on-device.
 
-## How scoring works (quick guide)
+## How scoring works
 
-1. **Setup tab** → enter teams + add your lineup → **Start game**.
-2. **Score tab** → when you're batting, tap the result. When you're on defense, tap
-   *+1 Run allowed* / *Out* to move the game along.
-3. Tap any **runner on a base** to advance them, mark a steal, score them, or call them out.
-4. RBIs and runs are credited automatically on hits/sacs/forced walks; use the
-   stats tab to fine-tune errors and pitcher lines.
+1. **Setup** → name both teams (pick their colors), then build each batting order.
+   The home order is pre-loaded with the Bombers; tap **Fill 9 spots** for a quick
+   away lineup, or add players by hand. **Play ball.**
+2. **Game** → tap the result of each plate appearance. Runners advance and the score
+   updates with the play.
+3. **Tap a runner** on the diamond to steal, advance, score, send back, or call out.
+4. **Plays** shows the running log by half-inning; **Box** has the line score and
+   batting lines for both teams.
 
 ## Tech
 
-Pure HTML/CSS/vanilla JS — a single static folder. State lives in `localStorage`.
-Deployed by `.github/workflows/deploy.yml` (GitHub Pages). To run locally just open
-`index.html`, or serve the folder: `python3 -m http.server`.
+Pure HTML / CSS / vanilla JS — a single static folder, no build step. The diamond is
+drawn on a `<canvas>`; runners are DOM tokens animated with CSS transitions. State
+lives in `localStorage`. Deployed by `.github/workflows/deploy.yml` to GitHub Pages.
+To run locally, open `index.html` or serve the folder: `python3 -m http.server`.
