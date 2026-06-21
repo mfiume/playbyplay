@@ -15,6 +15,24 @@
   const STORE = 'bloordale-scorekeeper-v1';
   const ROSTER = 'bloordale-roster-v1';
 
+  // Default batting order — used on first load and when "Load saved" finds none.
+  const DEFAULT_ROSTER = [
+    { num: '15', name: 'Ozzy Day' },
+    { num: '17', name: 'Emmett Pitton' },
+    { num: '19', name: 'Alexander Fiume' },
+    { num: '9',  name: 'Devin Sen' },
+    { num: '35', name: 'Connor Nascimento' },
+    { num: '10', name: 'Everett Funston' },
+    { num: '14', name: 'Gregory Stratigopoulos' },
+    { num: '99', name: 'Lincoln Shamliyan Bowen' },
+    { num: '5',  name: 'Adrian Stevanovic' },
+    { num: '12', name: 'Ryder Varrik' },
+    { num: '7',  name: 'Axel Pettengell' },
+    { num: '36', name: 'James Reason' },
+    { num: '78', name: 'William Manz' },
+  ];
+  const seedLineup = () => DEFAULT_ROSTER.map(p => ({ id: uid(), num: p.num, name: p.name, pos: '' }));
+
   let toastTimer;
   function toast(msg) {
     const t = $('#toast');
@@ -82,6 +100,7 @@
       if (raw) { g = JSON.parse(raw); return true; }
     } catch (e) {}
     g = blankGame();
+    g.lineup = seedLineup();   // pre-fill the default batting order on first use
     return false;
   }
   function snapshot() {
@@ -175,7 +194,7 @@
   function loadRoster() {
     try {
       const raw = localStorage.getItem(ROSTER);
-      if (!raw) { toast('No saved roster'); return; }
+      if (!raw) { g.lineup = seedLineup(); save(); renderLineup(); toast('Loaded default roster'); return; }
       g.lineup = JSON.parse(raw).map(p => ({ ...p, id: p.id || uid() }));
       save(); renderLineup(); toast('Roster loaded');
     } catch (e) { toast('Could not load roster'); }
@@ -663,7 +682,7 @@
   function resetAll() {
     if (!confirm('Erase the current game AND saved roster?')) return;
     try { localStorage.removeItem(STORE); localStorage.removeItem(ROSTER); } catch (e) {}
-    g = blankGame(); history.length = 0;
+    g = blankGame(); g.lineup = seedLineup(); history.length = 0;
     fillMeta(); renderLineup(); renderAll(); switchTab('setup'); toast('Reset complete');
   }
 
