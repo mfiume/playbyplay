@@ -26,22 +26,24 @@
   }
 
   // ---------- result definitions ----------
-  // reach: base the batter lands on (4 = scores). adv: bases all runners move on
-  // a hit. forced: walk-style push only. out: records an out.
+  // reach: base the batter lands on (4 = scores). Runners are NOT auto-advanced;
+  // only the minimum "force" needed to avoid two runners sharing a base is applied
+  // (this also produces the correct walk force). rbiOk: a run during this batter's
+  // turn is credited to them. Everything else is the scorekeeper's call (tap a runner).
   const R = {
-    '1B':  { label: 'Single',          tag: '1B',  hit: 1, ab: 1, reach: 1, adv: 1 },
-    '2B':  { label: 'Double',          tag: '2B',  hit: 1, ab: 1, reach: 2, adv: 2 },
-    '3B':  { label: 'Triple',          tag: '3B',  hit: 1, ab: 1, reach: 3, adv: 3 },
-    'HR':  { label: 'Home run',        tag: 'HR',  hit: 1, ab: 1, reach: 4, adv: 4 },
-    'BB':  { label: 'Walk',            tag: 'BB',  bb: 1, reach: 1, forced: 1 },
-    'HBP': { label: 'Hit by pitch',    tag: 'HP',  bb: 1, reach: 1, forced: 1 },
-    'ROE': { label: 'Reached on error',tag: 'E',   ab: 1, reach: 1, adv: 1, noRbi: 1, roe: 1 },
-    'FC':  { label: "Fielder's choice",tag: 'FC',  ab: 1, reach: 1, forced: 1 },
+    '1B':  { label: 'Single',          tag: '1B',  hit: 1, ab: 1, reach: 1, rbiOk: 1 },
+    '2B':  { label: 'Double',          tag: '2B',  hit: 1, ab: 1, reach: 2, rbiOk: 1 },
+    '3B':  { label: 'Triple',          tag: '3B',  hit: 1, ab: 1, reach: 3, rbiOk: 1 },
+    'HR':  { label: 'Home run',        tag: 'HR',  hit: 1, ab: 1, reach: 4, rbiOk: 1 },
+    'BB':  { label: 'Walk',            tag: 'BB',  bb: 1, reach: 1, rbiOk: 1 },
+    'HBP': { label: 'Hit by pitch',    tag: 'HP',  bb: 1, reach: 1, rbiOk: 1 },
+    'ROE': { label: 'Reached on error',tag: 'E',   ab: 1, reach: 1, roe: 1 },
+    'FC':  { label: "Fielder's choice",tag: 'FC',  ab: 1, reach: 1, rbiOk: 1 },
     'K':   { label: 'Strikeout',       tag: 'K',   ab: 1, out: 1, so: 1 },
-    'GO':  { label: 'Ground out',      tag: 'GO',  ab: 1, out: 1, adv: 1 },
-    'FO':  { label: 'Fly out',         tag: 'F',   ab: 1, out: 1 },
-    'PO':  { label: 'Pop / line out',  tag: 'P',   ab: 1, out: 1 },
-    'SAC': { label: 'Sacrifice',       tag: 'SAC', out: 1, sac: 1, adv: 1 },
+    'GO':  { label: 'Ground out',      tag: 'GO',  ab: 1, out: 1, rbiOk: 1 },
+    'FO':  { label: 'Fly out',         tag: 'F',   ab: 1, out: 1, rbiOk: 1 },
+    'PO':  { label: 'Pop / line out',  tag: 'P',   ab: 1, out: 1, rbiOk: 1 },
+    'SAC': { label: 'Sacrifice',       tag: 'SAC', out: 1, sac: 1, rbiOk: 1 },
     'DP':  { label: 'Double play',     tag: 'DP',  ab: 1, out: 2 },
   };
 
@@ -71,7 +73,7 @@
       idx: { away: 0, home: 0 },
       pas: [],
       runs: { away: 0, home: 0 },
-      rbi_seq: 0,
+      pendingPaId: null,   // the batter currently credited for runs that score
     };
   }
   function blankGame() {
@@ -234,6 +236,7 @@
     const lv = g.live;
     lv.bases = { 1: null, 2: null, 3: null };
     lv.outs = 0;
+    lv.pendingPaId = null;
     if (lv.half === 'top') lv.half = 'bottom';
     else { lv.half = 'top'; lv.inning += 1; }
     save();
@@ -259,22 +262,19 @@
     let runs = 0;
 
     if (meta.out) {
-      lv.outs += Math.min(meta.out, 3);
-      if (meta.adv && lv.outs < 3) runs += advance(meta.adv, scored); // sac/groundout can plate a run
+      lv.outs += Math.min(meta.out, 3);            // out(s); runners are NOT moved automatically
     } else if (meta.reach >= 4) {
-      runs += advance(4, scored);                 // runners all score
+      runs += forceMinimal(4, scored);             // a home run forces everyone home
       scored.push(pa.id); pa.scored = true; addRun(side);
-      runs += 1;                                  // batter drives in himself too
-    } else if (meta.forced) {
-      runs += forcePush(scored);
-      lv.bases[meta.reach] = mkRunner(pa, batter, side);
+      runs += 1;                                   // batter drives in himself too
     } else {
-      runs += advance(meta.adv || 0, scored);
+      runs += forceMinimal(meta.reach, scored);    // only runners truly forced advance
       lv.bases[meta.reach] = mkRunner(pa, batter, side);
     }
 
-    if (!meta.noRbi && (meta.hit || meta.forced || meta.sac)) pa.rbi = runs;
+    if (meta.rbiOk) pa.rbi = runs;                 // forced runs are RBIs when eligible
     lv.pas.push(pa);
+    lv.pendingPaId = pa.id;                         // runs scored before the next batter credit this one
     lv.idx[side] = (lv.idx[side] + 1) % Math.max(lineup(side).length, 1);
 
     const after = { 1: lv.bases[1] && lv.bases[1].paId, 2: lv.bases[2] && lv.bases[2].paId, 3: lv.bases[3] && lv.bases[3].paId };
@@ -288,6 +288,7 @@
     let msg = `${batter.num ? '#' + batter.num + ' ' : ''}${batter.name}: ${meta.label}`;
     if (runs) msg += ` · ${runs} in`;
     if (sideRetired) msg += ' · side retired';
+    else if (baseRunnersOn() && meta.reach < 4) msg += ' · tap runners to move them';
 
     enqueue(async () => {
       await animatePlan(plan);
@@ -297,34 +298,33 @@
   }
 
   function mkRunner(pa, batter, side) { return { paId: pa.id, batterId: batter.id, side, num: batter.num }; }
+  function baseRunnersOn() { const b = g.live.bases; return !!(b[1] || b[2] || b[3]); }
 
-  // advance every runner n bases (hits / sac). returns runs scored.
-  function advance(n, scored) {
-    if (!n) return 0;
+  // Advance runners ONLY as far as physics forces them: a trailing runner can't be
+  // passed and two runners can't share a base. Everything past this minimum is the
+  // scorekeeper's call. `reach` is the batter's final base (4 = home, for a HR).
+  // This single rule yields the correct force for both hits and walks.
+  function forceMinimal(reach, scored) {
     const lv = g.live; let runs = 0; const nb = { 1: null, 2: null, 3: null };
+    let last = reach;                              // the base just filled behind this runner
     for (const b of [1, 2, 3]) {
       const r = lv.bases[b]; if (!r) continue;
-      const t = b + n;
-      if (t >= 4) { runs++; scored.push(r.paId); markScored(r.paId); addRun(r.side); }
-      else nb[t] = r;
+      const fin = Math.max(b, last + 1);           // must stay ahead of the runner behind
+      last = fin;
+      if (fin >= 4) { runs++; scored.push(r.paId); markScored(r.paId); addRun(r.side); }
+      else nb[fin] = r;
     }
     lv.bases = nb; return runs;
   }
-  // forced push for walks/HBP/FC: only chained runners move.
-  function forcePush(scored) {
-    const lv = g.live; let runs = 0;
-    if (lv.bases[1]) {
-      if (lv.bases[2]) {
-        if (lv.bases[3]) { runs++; scored.push(lv.bases[3].paId); markScored(lv.bases[3].paId); addRun(lv.bases[3].side); }
-        lv.bases[3] = lv.bases[2];
-      }
-      lv.bases[2] = lv.bases[1];
-      lv.bases[1] = null;
-    }
-    return runs;
-  }
   function addRun(side) { g.live.runs[side] += 1; }
   function markScored(paId) { const p = paById(paId); if (p) p.scored = true; }
+  // Credit a manually-scored run to the batter whose turn it is, unless it was a
+  // steal of home (or the at-bat doesn't earn RBIs, e.g. a strikeout or error).
+  function creditRbi(action) {
+    if (action === 'steal') return;
+    const pa = paById(g.live.pendingPaId);
+    if (pa && R[pa.result] && R[pa.result].rbiOk) pa.rbi = (pa.rbi || 0) + 1;
+  }
 
   // ---------- manual runner actions (tap a token) ----------
   function runnerAction(paId, action) {
@@ -347,6 +347,7 @@
     } else if (action === 'score' || (action === 'adv' && base === 3) || (action === 'steal' && base === 3)) {
       lv.bases[base] = null;
       markScored(paId); addRun(r.side);
+      creditRbi(action);                           // a steal of home is not an RBI; an advance/score is
       plan.journeys.push({ paId, from: base, to: 4, exit: 'score' });
       plan.scoreBump = r.side;
     } else if (action === 'adv' || action === 'steal') {
