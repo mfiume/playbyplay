@@ -65,6 +65,10 @@
           <label>Field<input type="text" id="f-place" placeholder="Diamond / park"></label>
         </div>
         <div class="field-row">
+          <label class="swatch-label">Mercy<input type="number" id="f-mercy" min="0" max="99" inputmode="numeric" value="5"></label>
+          <label class="mercy-note">Runs per inning before the side is retired. Set to 0 to turn it off.</label>
+        </div>
+        <div class="field-row">
           <label>Away team<input type="text" id="f-away" placeholder="Visitors"></label>
           <label class="swatch-label">Color<input type="color" id="f-away-color" value="#34C0D9"></label>
         </div>
@@ -78,8 +82,8 @@
         <div class="panel-head">
           <h2 class="panel-title">Batting orders</h2>
           <div class="team-tabs">
-            <button class="team-tab active" id="tab-away" data-team="away">Away</button>
-            <button class="team-tab" id="tab-home" data-team="home">Home</button>
+            <button class="team-tab" id="tab-away" data-team="away">Away</button>
+            <button class="team-tab active" id="tab-home" data-team="home">Home</button>
           </div>
         </div>
         <p class="hint" id="lineup-hint">Add batters in order. Use ▲▼ to reorder.</p>

@@ -73,13 +73,14 @@
       idx: { away: 0, home: 0 },
       pas: [],
       runs: { away: 0, home: 0 },
+      halfRuns: 0,         // runs in the current half-inning (for the mercy rule)
       pendingPaId: null,   // the batter currently credited for runs that score
     };
   }
   function blankGame() {
     return {
       meta: {
-        date: '', place: '',
+        date: '', place: '', mercy: 5,
         away: { name: 'Visitors', color: '#34C0D9' },
         home: { name: 'Bombers', color: '#E5484D' },
       },
@@ -202,10 +203,12 @@
     g.meta.home.name = $('#f-home').value.trim() || 'Bombers';
     g.meta.away.color = $('#f-away-color').value;
     g.meta.home.color = $('#f-home-color').value;
+    g.meta.mercy = Math.max(0, parseInt($('#f-mercy').value, 10) || 0);
   }
   function fillMeta() {
     $('#f-date').value = g.meta.date || new Date().toISOString().slice(0, 10);
     $('#f-place').value = g.meta.place;
+    $('#f-mercy').value = g.meta.mercy != null ? g.meta.mercy : 5;
     $('#f-away').value = g.meta.away.name;
     $('#f-home').value = g.meta.home.name;
     $('#f-away-color').value = g.meta.away.color;
@@ -236,6 +239,7 @@
     const lv = g.live;
     lv.bases = { 1: null, 2: null, 3: null };
     lv.outs = 0;
+    lv.halfRuns = 0;
     lv.pendingPaId = null;
     if (lv.half === 'top') lv.half = 'bottom';
     else { lv.half = 'top'; lv.inning += 1; }
@@ -278,7 +282,7 @@
     lv.idx[side] = (lv.idx[side] + 1) % Math.max(lineup(side).length, 1);
 
     const after = { 1: lv.bases[1] && lv.bases[1].paId, 2: lv.bases[2] && lv.bases[2].paId, 3: lv.bases[3] && lv.bases[3].paId };
-    const sideRetired = lv.outs >= 3;
+    const end = halfOver();
 
     // ----- build the animation, then commit -----
     const plan = buildPlan(before, after, scored, pa, meta, side);
@@ -287,12 +291,12 @@
 
     let msg = `${batter.num ? '#' + batter.num + ' ' : ''}${batter.name}: ${meta.label}`;
     if (runs) msg += ` · ${runs} in`;
-    if (sideRetired) msg += ' · side retired';
+    if (end) msg += ` · ${end}`;
     else if (baseRunnersOn() && meta.reach < 4) msg += ' · tap runners to move them';
 
     enqueue(async () => {
       await animatePlan(plan);
-      if (sideRetired) { await wait(280); await sweepTokens(); endHalf(true); renderAll(); }
+      if (end) { await wait(280); await sweepTokens(); endHalf(true); renderAll(); }
     });
     toast(msg);
   }
@@ -316,7 +320,7 @@
     }
     lv.bases = nb; return runs;
   }
-  function addRun(side) { g.live.runs[side] += 1; }
+  function addRun(side) { g.live.runs[side] += 1; g.live.halfRuns += 1; }
   function markScored(paId) { const p = paById(paId); if (p) p.scored = true; }
   // Credit a manually-scored run to the batter whose turn it is, unless it was a
   // steal of home (or the at-bat doesn't earn RBIs, e.g. a strikeout or error).
@@ -327,45 +331,81 @@
   }
 
   // ---------- manual runner actions (tap a token) ----------
+  // Every move keeps the bases legal: runners can't pass each other or share a base,
+  // and a trailing runner can't reach a base without the runners ahead clearing it.
+  // So advancing/scoring a runner cascades the runners ahead of him as needed.
   function runnerAction(paId, action) {
     const lv = g.live;
     let base = null;
     for (const b of [1, 2, 3]) if (lv.bases[b] && lv.bases[b].paId === paId) base = b;
     if (base == null) { hidePop(); return; }
     snapshot();
-    const r = lv.bases[base];
+    const side = lv.bases[base].side;
     const plan = { journeys: [], scoreBump: null };
+    let scoredCount = 0, label;
+
     if (action === 'out') {
-      lv.bases[base] = null;
-      lv.outs += 1;
+      lv.bases[base] = null; lv.outs += 1;
       plan.journeys.push({ paId, from: base, to: base, exit: 'out' });
-      if (lv.outs >= 3) {
-        save(); renderScorebar(); renderPlays();
-        enqueue(async () => { await animatePlan(plan); await wait(200); await sweepTokens(); endHalf(true); renderAll(); });
-        hidePop(); toast('Out on the bases · side retired'); return;
-      }
-    } else if (action === 'score' || (action === 'adv' && base === 3) || (action === 'steal' && base === 3)) {
-      lv.bases[base] = null;
-      markScored(paId); addRun(r.side);
-      creditRbi(action);                           // a steal of home is not an RBI; an advance/score is
-      plan.journeys.push({ paId, from: base, to: 4, exit: 'score' });
-      plan.scoreBump = r.side;
-    } else if (action === 'adv' || action === 'steal') {
-      const t = base + 1;
-      if (lv.bases[t]) { hidePop(); toast('Base is occupied'); undoStack.pop(); return; }
-      lv.bases[t] = r; lv.bases[base] = null;
-      plan.journeys.push({ paId, from: base, to: t });
+      label = 'Out on the bases';
+
     } else if (action === 'back') {
       const t = base - 1;
-      if (t < 1 || lv.bases[t]) { hidePop(); undoStack.pop(); return; }
-      lv.bases[t] = r; lv.bases[base] = null;
+      if (t < 1) { hidePop(); undoStack.pop(); return; }
+      if (lv.bases[t]) { hidePop(); toast('A runner is already on that base'); undoStack.pop(); return; }
+      lv.bases[t] = lv.bases[base]; lv.bases[base] = null;
       plan.journeys.push({ paId, from: base, to: t });
+      label = 'Back a base';
+
+    } else if (action === 'score' || base === 3) {
+      // this runner scores — so does everyone ahead of him (higher base)
+      for (const b of [3, 2, 1]) {
+        if (b < base) break;
+        const r = lv.bases[b]; if (!r) continue;
+        lv.bases[b] = null; markScored(r.paId); addRun(r.side);
+        creditRbi(b === base ? action : 'adv');
+        plan.journeys.push({ paId: r.paId, from: b, to: 4, exit: 'score' });
+        scoredCount++;
+      }
+      plan.scoreBump = side;
+      label = scoredCount > 1 ? `${scoredCount} score` : (action === 'steal' ? 'Steal of home' : 'Run scores');
+
+    } else { // adv / steal by one base — push the blocking runners ahead up one too
+      let top = base;
+      while (top + 1 <= 3 && lv.bases[top + 1]) top++;
+      for (let b = top; b >= base; b--) {
+        const r = lv.bases[b]; lv.bases[b] = null;
+        const t = b + 1;
+        if (t >= 4) { markScored(r.paId); addRun(r.side); creditRbi(action); plan.journeys.push({ paId: r.paId, from: b, to: 4, exit: 'score' }); scoredCount++; }
+        else { lv.bases[t] = r; plan.journeys.push({ paId: r.paId, from: b, to: t }); }
+      }
+      if (scoredCount) plan.scoreBump = side;
+      label = action === 'steal' ? 'Stolen base' : (top > base ? 'Runners advance' : 'Advanced');
     }
-    save(); renderScorebar(); renderNowBatting(); renderPlays(); renderBox();
-    enqueue(() => animatePlan(plan));
+
     hidePop();
-    const label = { steal: 'Stolen base', adv: 'Advanced', back: 'Back a base', score: 'Run scores', out: 'Out on the bases' }[action] || 'Done';
-    toast(label);
+    finishHalf(plan, label, action === 'out');
+  }
+  // Commit a play's animation, then end the half if it's over (3 outs or mercy rule).
+  function finishHalf(plan, label, fromOut) {
+    const lv = g.live;
+    save();
+    renderScorebar(); renderNowBatting(); renderPlays(); renderBox();
+    const end = halfOver();
+    if (end) {
+      enqueue(async () => { await animatePlan(plan); await wait(240); await sweepTokens(); endHalf(true); renderAll(); });
+      toast(`${label} · ${end}`);
+    } else {
+      enqueue(() => animatePlan(plan));
+      toast(label);
+    }
+  }
+  // Returns a reason string if the half should end, else null.
+  function halfOver() {
+    if (g.live.outs >= 3) return 'side retired';
+    const m = +g.meta.mercy || 0;
+    if (m > 0 && g.live.halfRuns >= m) return `mercy rule · ${m} runs`;
+    return null;
   }
 
   // =========================================================================
@@ -759,11 +799,12 @@
     $('#btn-load-roster').addEventListener('click', loadRoster);
     $('#btn-start').addEventListener('click', startGame);
     $$('.team-tab').forEach(t => t.addEventListener('click', () => switchEditTeam(t.dataset.team)));
+    switchEditTeam(editTeam);
     $('#lineup-list').addEventListener('click', e => {
       const up = e.target.dataset.up, down = e.target.dataset.down, del = e.target.dataset.del;
       if (up) moveRow(up, -1); else if (down) moveRow(down, 1); else if (del) delRow(del);
     });
-    ['#f-date', '#f-place', '#f-away', '#f-home', '#f-away-color', '#f-home-color'].forEach(s =>
+    ['#f-date', '#f-place', '#f-mercy', '#f-away', '#f-home', '#f-away-color', '#f-home-color'].forEach(s =>
       $(s).addEventListener('change', () => { readMeta(); save(); renderScorebar(); renderLineup(); }));
 
     // outcomes
